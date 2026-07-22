@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { CourseLoader } from './loader';
+import { type CourseLoader } from './loader';
 import { Hole, PlayerState } from './types';
-import { type GolfBallEvents, type GolfBall } from '@/objects/golfBall';
+import { type GolfBall } from '@/objects/golfBall';
+import { type CourseSurfaceProperties } from '@/courses/surfaces';
 import EventEmitter from 'eventemitter3';
 import { CoursePlayer } from './player';
 import { DefaultGimmeDistances } from '@/utils/data';
@@ -19,6 +20,24 @@ interface CourseGameEvents {
 // }
 type CourseGameOptions = {
   setupData: OpenGolfSim.SetupData,
+  /**
+   * IDs of the players this client simulates locally. Defaults to ALL players,
+   * which is exactly single-machine behavior (this client owns everyone, so
+   * `isLocalTurn` is always true). In multiplayer each client passes only the
+   * players it owns.
+   */
+  localPlayerIds?: string[],
+}
+
+/**
+ * The outcome of a completed shot expressed as plain data — no reference to the
+ * local `GolfBall`. This is what `applyShotResult` consumes, so the same scoring
+ * path serves both a locally simulated shot and one replayed from the network.
+ */
+export type ShotResultInput = {
+  endPosition: THREE.Vector3,
+  surface?: CourseSurfaceProperties,
+  isHoled: boolean,
 }
 
 export class CourseGame extends EventEmitter<CourseGameEvents> {
@@ -32,6 +51,8 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
   activeHole: Hole;
   puttingEnabled: boolean;
   gimmeDistances: number[];
+  /** Players this client owns. See CourseGameOptions.localPlayerIds. */
+  localPlayerIds: Set<string>;
   #orderedHoles: Hole[];
   // #playerData: Map<string, PlayerState>;
 
@@ -44,21 +65,41 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     this.gimmeDistances = options?.setupData.gimmeDistances || DefaultGimmeDistances;
     this.puttingEnabled = !!options?.setupData.puttingEnabled;
 
+    // default: own every player (single-machine play), so isLocalTurn is always true
+    this.localPlayerIds = new Set(options?.localPlayerIds ?? this.players.map(p => p.id));
+
     this.currentPlayerIndex = 0;
     this.currentHoleIndex = 0;
     this.#orderedHoles = Array.from(this.course.holes.values()).map(h => ({ ...h, _num: parseInt(h.number) })).sort((a, b) => (a._num < b._num ? -1 : 1));
     if (!this.#orderedHoles.length) {
       throw new Error('Course has no holes!');
     }
-    
+
     this.activePlayer = this.players[this.currentPlayerIndex];
     this.activeHole = this.#orderedHoles[this.currentHoleIndex];
     // this.#playerData = new Map();
 
-    this.golfBall.on('shotEnded', (details) => this._onShotEnded(details));
-    
+    // Adapter: read the local ball's final state and hand it to the shared
+    // scoring path as plain data. In multiplayer a network result calls
+    // applyShotResult directly with the same shape.
+    this.golfBall.on('shotEnded', (details) => {
+      if (!this.golfBall.object) {
+        throw new Error('GolfBall object not found');
+      }
+      this.applyShotResult(this.activePlayer.id, {
+        endPosition: this.golfBall.object.position.clone(),
+        surface: details.surface,
+        isHoled: details.isHoled,
+      });
+    });
+
     // setup first hole
     this._setupHole();
+  }
+
+  /** True when the player whose turn it is belongs to this client. */
+  get isLocalTurn(): boolean {
+    return this.localPlayerIds.has(this.activePlayer.id);
   }
   
   _setupHole() {
@@ -119,52 +160,69 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     console.log('_onHoleEnded');
   }
 
-  _addStrokes(strokes = 1, endOfHole = false) {
-    this.activePlayer.strokes += strokes;
+  _addStrokes(player: CoursePlayer, strokes = 1, endOfHole = false) {
+    player.strokes += strokes;
     const holeKey = `${this.activeHole.number}`;
-    const existingHoleScore = this.activePlayer.scorecard.get(holeKey);
+    const existingHoleScore = player.scorecard.get(holeKey);
     // finalize player hole score
     const newHoleScore = existingHoleScore ? existingHoleScore + strokes : strokes;
-    this.activePlayer.scorecard.set(holeKey, newHoleScore);
-    
+    player.scorecard.set(holeKey, newHoleScore);
+
     if (endOfHole) {
-      this.activePlayer.toPar = this.#orderedHoles.slice(0, this.currentHoleIndex + 1).reduce((prev, hole) => {
-        const s = this.activePlayer.scorecard.get(`${hole.number}`);
+      player.toPar = this.#orderedHoles.slice(0, this.currentHoleIndex + 1).reduce((prev, hole) => {
+        const s = player.scorecard.get(`${hole.number}`);
         const diff = (s || 0) - hole.par;
         return prev + diff;
       }, 0);
     }
   }
 
-  _onShotEnded(...[details]: Parameters<GolfBallEvents['shotEnded']>) {
-    const { surface } = details;
-    if (!this.activePlayer) {
-      throw new Error('No player found!');
+  /**
+   * Apply a completed shot to game state from plain data. Called by the local
+   * ball's shotEnded adapter today; in multiplayer a network result calls it
+   * directly with the same shape. No reference to the local GolfBall.
+   *
+   * Turn-based invariant: the shot belongs to the player whose turn it is, so
+   * `playerId` is expected to be the active player. We resolve the shooter from
+   * `playerId` (rather than assuming activePlayer) so out-of-order network
+   * results score the right player; rotation still advances from activePlayer.
+   */
+  applyShotResult(playerId: string, result: ShotResultInput) {
+    const player = this.players.find(p => p.id === playerId);
+    if (!player) {
+      throw new Error(`applyShotResult: no player with id ${playerId}`);
     }
-    this._addStrokes();
+    if (player !== this.activePlayer) {
+      // Should not happen in turn-based play; guard for network edge cases.
+      console.warn(`applyShotResult: result for ${playerId} but active player is ${this.activePlayer.id}`);
+    }
+
+    this._addStrokes(player);
 
     // store for mulligans
-    if (!this.activePlayer.previousStart) {
-      this.activePlayer.previousStart = new THREE.Vector3();
+    if (!player.previousStart) {
+      player.previousStart = new THREE.Vector3();
     }
-    this.activePlayer.previousStart.copy(this.activePlayer.start);
-  
+    player.previousStart.copy(player.start);
+
     if (!this.practiceMode) {
-      if (!this.golfBall.object) {
-        throw new Error('GolfBall object not found');
-      }
-      this.activePlayer.start.copy(this.golfBall.object.position);
+      player.start.copy(result.endPosition);
       // hack greens as done
-      if (this.golfBall.physics?.isHoled) {
-        this.activePlayer.disabled = true;
+      if (result.isHoled) {
+        player.disabled = true;
         this._nextPlayer();
         console.log(`Ball in hole! End hole`);
-        this._addStrokes(0, true);
-      } else if (surface?.type === 'green' && !this.puttingEnabled) {
+        // NOTE: preserving main's exact behavior — this finalize runs AFTER
+        // _nextPlayer(), so it targets this.activePlayer (the *next* player),
+        // not the shooter. Suspected latent bug (writes a 0 hole-score for the
+        // next player, which hasFinishedHole() then treats as finished); kept
+        // as-is so Phase 2 is a pure extraction. See MULTIPLAYER_PLAN open items.
+        this._addStrokes(this.activePlayer, 0, true);
+      } else if (result.surface?.type === 'green' && !this.puttingEnabled) {
         // total score
         // TODO: change to add auto-putt number
         const holePos = this.activeHole.waypoints.get('pin');
-        const distanceToHole = holePos?.distanceTo(this.golfBall.object.position) || Infinity;
+        const distanceToHole = holePos?.distanceTo(result.endPosition) || Infinity;
         let autoPutt = 3;
         if (distanceToHole <= this.gimmeDistances[0]) {
           autoPutt = 1;
@@ -172,16 +230,16 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
           autoPutt = 2;
         }
         console.log(`Distance to hole: ${distanceToHole}m, auto-putt score: ${autoPutt}`);
-        this._addStrokes(autoPutt, true);
-        
+        this._addStrokes(player, autoPutt, true);
+
         // disable player when they finish a hole (so they are not selectable in UI)
-        this.activePlayer.disabled = true;
+        player.disabled = true;
         this._nextPlayer();
       }
     }
 
 
-    this.updateAimPoint(this.activePlayer.start);    
+    this.updateAimPoint(this.activePlayer.start);
     this.emit('nextShot', this.activePlayer);
   }
 
@@ -245,6 +303,12 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
   }
 
   selectPlayer(player: OpenGolfSim.Player) {
+    // Only players this client owns can be manually selected. In single-machine
+    // play localPlayerIds contains everyone, so this is unrestricted as before.
+    if (!this.localPlayerIds.has(player.id)) {
+      console.warn(`selectPlayer: ${player.id} is not owned by this client`);
+      return;
+    }
     const newIndex = this.players.findIndex(p => p.id === player.id);
     if (newIndex > -1) {
       this.currentPlayerIndex = newIndex;
@@ -253,6 +317,29 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       // if (!playerState) throw new Error('Missing player state data');
       this.emit('nextShot', this.activePlayer);
     }
+  }
+
+  /**
+   * Set the active player/hole from an external source (the server's turn
+   * broadcast in multiplayer) WITHOUT running local scoring. Local play uses
+   * _nextPlayer instead; this is unused until Phase 3.
+   */
+  setTurn(playerId: string, holeNumber?: string) {
+    const playerIndex = this.players.findIndex(p => p.id === playerId);
+    if (playerIndex === -1) {
+      console.warn(`setTurn: unknown player ${playerId}`);
+      return;
+    }
+    if (holeNumber !== undefined) {
+      const holeIndex = this.#orderedHoles.findIndex(h => h.number === holeNumber);
+      if (holeIndex > -1) {
+        this.currentHoleIndex = holeIndex;
+        this.activeHole = this.#orderedHoles[this.currentHoleIndex];
+      }
+    }
+    this.currentPlayerIndex = playerIndex;
+    this.activePlayer = this.players[this.currentPlayerIndex];
+    this.emit('nextShot', this.activePlayer);
   }
   
   autoSelectClub() {
