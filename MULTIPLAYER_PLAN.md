@@ -197,6 +197,17 @@ and points at the host's address.
 }
 ```
 
+> **Player IDs must be namespaced on join.** `generateSetupData`
+> (`src/utils/data.ts:34`) emits `player-1`, `player-2`, and Desktop's configured
+> golfer list is likely to do something similar. Two clients will therefore both
+> arrive claiming `player-1`, and the server would silently merge them —
+> corrupting scorecards and the turn rotation.
+>
+> On join, rewrite every incoming player id to `${clientId}:${player.id}` and use
+> that everywhere in the roster. The client keeps a local map back to its own
+> original ids for UI. Do this in Phase 1, not later; every subsequent phase
+> assumes roster ids are globally unique.
+
 **Protocol** (JSON over WS; `type` discriminated, mirroring the existing
 `AppBridge` message style):
 
@@ -425,10 +436,59 @@ The course GLB is fetched from `coursedata.opengolfsim.com` by both clients, so
 geometry is identical with no syncing. Only the code needs to match — which is
 what `protocolVersion` guards.
 
-### Still required
+### Launch monitors: two run modes, and they are not the same
 
-Each participating machine needs its own launch monitor for real play. Use
-`testShots: true` (already enabled) to develop and test without one.
+Both participants use a **Square** via `ogs-plugin-square`. The plugin is not a
+problem in itself — each machine has its own launch monitor feeding its own
+Desktop feeding its own client, which maps cleanly onto player ownership. But it
+dictates *where the game runs*:
+
+```
+Square LM --bluetooth--> ogs-plugin-square --shotData.sendShot()--> Desktop
+                         (sandboxed, no require/import)               |
+                                                          window.ogsElectron
+                                                                      v
+                                                    AppBridge --> app.on('shot')
+```
+
+Plugins live in `.../opengolfsim-desktop/plugins/` and run *inside Desktop*.
+A browser tab has no `window.ogsElectron` (`src/app.ts:68-74` sets
+`appType = 'web'`), so **the Square plugin can never deliver shots to the vite
+dev server.**
+
+| | Dev mode | Real play |
+|---|---|---|
+| Runs in | browser via `npm run dev` | OGS Desktop, as a custom game |
+| Shot source | `testShots: true` keyboard | Square via plugin |
+| `app.appType` | `'web'` | `'desktop'` |
+| Iteration | instant, HMR | `npm run build` + copy to Desktop |
+
+Real play means packaging as a custom game: a folder in
+`~/Library/Application Support/opengolfsim-desktop/fuse/<name>/` containing
+`game.json` + built `index.html` (see main README). Desktop then supplies
+`setupData.players` from its configured golfers — which is exactly the per-client
+player set the ownership model wants.
+
+### ⚠ Test this before building Phase 3
+
+**Can a custom game running inside OGS Desktop open a WebSocket to an arbitrary
+host?** Electron apps commonly set a Content Security Policy restricting
+`connect-src`. If Desktop blocks it, the client cannot reach the relay in real
+play and the architecture needs rework — so find out early. A ten-line custom
+game that tries `new WebSocket(...)` and logs the result is enough.
+
+Fallback if blocked: the plugin sandbox exposes `webSockets.createWebSocket()`
+(`ogs-plugin-square/plugins.d.ts`), so a plugin can reach the network even when
+the renderer cannot. Bridging plugin → game is awkward (`shotData.sendShot()` is
+the only channel into the game and it is shot-shaped), but it is not a dead end.
+
+### Stray shots are now a real problem, not a hypothetical
+
+With live hardware, someone hitting a practice ball out of turn is guaranteed to
+happen. The client **must drop inbound `app.on('shot')` events when
+`!isLocalTurn`**, and should also ignore them while a local shot is still
+resolving. Listed under Phase 5 but treat it as required for the first real
+round with Brett — without it, a stray swing corrupts the shared scorecard.
 
 ---
 
