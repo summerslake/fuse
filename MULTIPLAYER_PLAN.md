@@ -1,6 +1,8 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
-**Status:** Not started. Phases 1 & 2 are next.
+**Status:** Desktop static spike done (2026-07-23); an *empirical* spike (needs
+the running app + a Square) is the gating first task — see "How OGS Desktop runs
+fuse". Phases 1 & 2 follow.
 **Written:** 2026-07-22
 **Repo:** clone of `OpenGolfSim/fuse` @ `6f10092` (`fix: short chip physics (#14)`)
 
@@ -197,11 +199,11 @@ and points at the host's address.
 }
 ```
 
-> **Player IDs must be namespaced on join.** `generateSetupData`
-> (`src/utils/data.ts:34`) emits `player-1`, `player-2`, and Desktop's configured
-> golfer list is likely to do something similar. Two clients will therefore both
-> arrive claiming `player-1`, and the server would silently merge them —
-> corrupting scorecards and the turn rotation.
+> **Player IDs must be namespaced on join.** In *dev*, `generateSetupData`
+> (`src/utils/data.ts:34`) emits `player-1`, `player-2` — two dev clients both
+> claim `player-1`. Real Desktop golfers use UUIDs (confirmed: `config.json` has
+> `id: "70780128-0767-…"`), so real-vs-real collision is unlikely, but dev-vs-dev
+> and dev-vs-real are still live. Cheap and universal fix regardless:
 >
 > On join, rewrite every incoming player id to `${clientId}:${player.id}` and use
 > that everywhere in the roster. The client keeps a local map back to its own
@@ -436,51 +438,102 @@ The course GLB is fetched from `coursedata.opengolfsim.com` by both clients, so
 geometry is identical with no syncing. Only the code needs to match — which is
 what `protocolVersion` guards.
 
-### Launch monitors: two run modes, and they are not the same
+### How OGS Desktop runs fuse — findings from the v1.17.1 spike (2026-07-23)
 
-Both participants use a **Square** via `ogs-plugin-square`. The plugin is not a
-problem in itself — each machine has its own launch monitor feeding its own
-Desktop feeding its own client, which maps cleanly onto player ownership. But it
-dictates *where the game runs*:
+> **Correction log.** This section was rewritten twice. (1) The original plan
+> assumed real play = a custom game packaged *inside* Desktop via
+> `window.ogsElectron`, and worried about Desktop's CSP. (2) A mid-spike draft
+> then claimed "Desktop can't run fuse at all" — **also wrong**, contradicted by
+> the running app (fuse games appear in the library with an "F" icon and launch
+> fine). The static asar read missed the launcher. The facts below come from the
+> app's own runtime **logs**, which are authoritative. Keep this history so we
+> don't relitigate it.
+
+#### Ground truth from the Desktop logs (`~/Library/Logs/opengolfsim-desktop/main.log`)
 
 ```
-Square LM --bluetooth--> ogs-plugin-square --shotData.sendShot()--> Desktop
-                         (sandboxed, no require/import)               |
-                                                          window.ogsElectron
-                                                                      v
-                                                    AppBridge --> app.on('shot')
+[debug] (ipc)   Launching course (fuse_range)
+[info]  (WEBGL) Launching https://app.opengolfsim.com/fuse/examples/range/index.html
+[info]  (WEBGL) shot { ... }        ← Square shots flow into the fuse game
 ```
 
-Plugins live in `.../opengolfsim-desktop/plugins/` and run *inside Desktop*.
-A browser tab has no `window.ogsElectron` (`src/app.ts:68-74` sets
-`appType = 'web'`), so **the Square plugin can never deliver shots to the vite
-dev server.**
+So Desktop **does** run fuse. It:
+- Loads the game from a **remote HTTPS URL**, `${app_url}/fuse/examples/.../index.html`.
+- `app_url` defaults to `https://app.opengolfsim.com` but is **overridable** —
+  `OGS_APP_URL` env var, or an `app_url` key in the asar's `config.json`
+  (`lib/config.js:29-55`). This is the hook that could point Desktop at our fork.
+- Delivers Square shots into that page (the `(WEBGL) shot` log lines).
 
-| | Dev mode | Real play |
-|---|---|---|
-| Runs in | browser via `npm run dev` | OGS Desktop, as a custom game |
-| Shot source | `testShots: true` keyboard | Square via plugin |
-| `app.appType` | `'web'` | `'desktop'` |
-| Iteration | instant, HMR | `npm run build` + copy to Desktop |
+The launcher logs under a `WEBGL` scope; the embedding mechanism (iframe vs child
+window) was not pinned down statically — the shipped `client/dist/bundle.js`
+contains no `/fuse/` or `webgl` strings, so the embedding likely lives in code
+served from `app.opengolfsim.com` itself. **This is one of the things the
+empirical spike below will reveal** (via the fuse page's own `app.appType`).
 
-Real play means packaging as a custom game: a folder in
-`~/Library/Application Support/opengolfsim-desktop/fuse/<name>/` containing
-`game.json` + built `index.html` (see main README). Desktop then supplies
-`setupData.players` from its configured golfers — which is exactly the per-client
-player set the ownership model wants.
+#### What this means: Desktop loads *their* fuse, not *ours*
 
-### ⚠ Test this before building Phase 3
+The decisive constraint is not "can Desktop run fuse" (it can) but **"Desktop
+loads a fixed remote build we don't control."** Our multiplayer code only reaches
+a real Square this way if we can point `app_url` at our own build. So there are
+two candidate real-play paths.
 
-**Can a custom game running inside OGS Desktop open a WebSocket to an arbitrary
-host?** Electron apps commonly set a Content Security Policy restricting
-`connect-src`. If Desktop blocks it, the client cannot reach the relay in real
-play and the architecture needs rework — so find out early. A ten-line custom
-game that tries `new WebSocket(...)` and logs the result is enough.
+**Path A — override `app_url` to our fork (preferred if it works).**
+Serve our multiplayer fuse fork locally over http, set `OGS_APP_URL` (or
+`config.json` `app_url`) to it, and let Desktop drive it exactly as it drives the
+hosted app: it loads our page and pipes Square shots in through its existing WEBGL
+channel. Our fork then opens `ws://` to the relay for multiplayer sync.
+- If Desktop embeds fuse as an **iframe** using `postMessage`, our fork already
+  supports it: `appType: 'webapp'` (`src/app.ts:72`, `window.self !== window.top`)
+  → shots arrive via `window.addEventListener('message')`, results go back via
+  `window.parent.postMessage`. **No fuse code change needed to receive shots.**
+- The open question for Path A is the **original one, now genuinely live**: can a
+  page loaded this way open a `ws://` to the relay? If our page is served from
+  `http://localhost:PORT`, its origin is http → it may open `ws://` freely
+  (localhost is a trustworthy origin; mixed-content blocking only applies to
+  https *pages*). If instead it ends up in a secure/`https` context, browsers
+  force `wss://` and the relay needs TLS. **Must be measured, not assumed.**
 
-Fallback if blocked: the plugin sandbox exposes `webSockets.createWebSocket()`
-(`ogs-plugin-square/plugins.d.ts`), so a plugin can reach the network even when
-the renderer cannot. Bridging plugin → game is awkward (`shotData.sendShot()` is
-the only channel into the game and it is shot-shaped), but it is not a dead end.
+**Path B — plain browser + a shot bridge from Desktop's Developer API (fallback).**
+Run our fork in a normal browser tab and get Square shots from Desktop's
+Developer API: `lib/developerAPI.js` runs an always-on **raw TCP server on
+`localhost:3111`** (started unconditionally for any signed-in user,
+`lib/system/services.js:28`; port overridable via `launchMonitor.apiPort`).
+- ⚠ **Caveat that weakens Path B:** the `:3111` broadcasts observed in code fire
+  on the *native Unity* `result`/`player` events (`lib/launch/index.js:61,71`).
+  During a **fuse** session the native core isn't the simulator, so `:3111` may be
+  **silent**. Whether raw Square shots hit `:3111` independent of the active
+  engine is **unverified** and is the first thing to test if we go this route.
+- If it does emit, a browser can't open raw TCP anyway, so this path needs a small
+  Node **bridge**: TCP client to `:3111` → `ws://localhost` → our page (feed into
+  `launchShot()` where `testShots` does today). ~40 lines. The bridge doubles as a
+  place to co-host the relay.
+
+**Recommendation:** try Path A first — it reuses Desktop's own shot pipe and needs
+no bridge. Fall back to Path B only if the `app_url` override doesn't take or the
+`ws://` connection is blocked by a secure context.
+
+#### ⚠ First task before Phase 3 — an empirical spike (needs the running app + a Square)
+
+Only the user can run this (GUI + hardware). It answers both open questions at once.
+
+1. **Point Desktop at a local build.** Serve *stock* fuse locally
+   (`npm run build` + a static serve, or `npm run dev`) and launch Desktop with
+   `OGS_APP_URL=http://localhost:PORT` (from a terminal so the env var is seen),
+   then launch a fuse course from the library.
+   - Does our locally-served fuse load inside Desktop? → confirms Path A viable.
+2. **In that running fuse page, check two things** (temporary on-screen log or via
+   the page's console):
+   - `app.appType` → tells us `'webapp'` (iframe/postMessage) vs `'desktop'` vs
+     `'web'`, and therefore how shots arrive and whether our fork needs changes.
+   - `new WebSocket('ws://<host>:<port>')` to a throwaway server → does it open, or
+     is it blocked as mixed content / by CSP? This is the real go/no-go for `ws://`
+     vs needing `wss://`.
+3. Take a real swing; confirm the shot reaches the page (fuse simulates it).
+
+If step 1 loads and step 2's WebSocket opens, Path A is green and the whole
+real-play story is just "override `app_url`, open `ws://` to the relay." If the
+WebSocket is blocked, we either give the relay TLS (`wss://`) or fall back to
+Path B and verify `:3111` emits during fuse play.
 
 ### Stray shots are now a real problem, not a hypothetical
 
