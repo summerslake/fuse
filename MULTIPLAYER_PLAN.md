@@ -1,20 +1,31 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
-- ✅ **Phase 1 done** (2026-07-23) — relay server (`server/`) + `NetClient`
-  (`src/net/`) + in-process relay via the vite plugin + `?room` join glue.
-  Commits `de0e5e5` (net layer + tests), `d36a1c3` (examples wiring). 28 vitest
-  tests pass, incl. an end-to-end NetClient↔relay suite; verified live against
-  `npm run dev` (relay on :8080). Hole-out fix also landed (`4f04866`).
-- ✅ **Phase 2 done** (2026-07-23) — `CourseGame` refactor + ownership
-  (`applyShotResult`, `localPlayerIds`/`isLocalTurn`/`setTurn`).
-- Desktop static spike done; an *empirical* spike (needs the running app + a
-  Square) is still pending — see "How OGS Desktop runs fuse". Not a blocker for
-  Phase 3 (browser + keyboard).
-- **Next: Phase 3** — wire `NetClient` ↔ `CourseGame` in `courses.ts`: local
-  `shotEnded` → `sendShotResult` → `shot` broadcast → `applyShotResult` on every
-  client; `hole_complete` → `turn` → `setTurn`. Roster from the server instead of
-  `setupData.players`. Target: two tabs play a real keyboard round.
+- ✅ **Phase 3 done** (2026-07-23) — `GameSync` (`src/net/gameSync.ts`) wires
+  `NetClient` ↔ `CourseGame`; `courses.ts` builds the game from the server roster
+  and locks input off-turn. Commits `ffdf728` (CourseGame networked mode),
+  `1b7d091` (GameSync), `e8cdf43` (examples). 33 vitest tests pass, incl. a
+  headless two-client full-round sync test through a real relay. Browser two-tab
+  round NOT yet run by a human (see below).
+- ✅ **Phase 2 done** — `CourseGame` refactor + ownership.
+- ✅ **Phase 1 done** — relay server + `NetClient` + in-process relay.
+- Desktop empirical spike (needs the app + a Square) still pending; not a blocker.
+- **Next: Phase 4** — ghost balls for remote shots (replay sample arrays via
+  `BallTrail`; populate the unused `ballTrail` field). Then Phase 5 robustness.
+
+**Verify Phase 3 in a browser (the one thing tests can't cover):** two tabs on
+`courses/index.html?courseUrl=<glb>&room=garage&name=Lake` and `...&name=Brett`
+(with `npm run dev` running, which hosts the relay). Fire keyboard shots on the
+active tab; the other should stay locked out and its scorecard should track. Ghost
+balls come in Phase 4, so remote shots currently update the scorecard with no ball
+flight.
+
+**Two known Phase-3 gaps to close in Phase 5:**
+- Live roster changes after start are ignored (a late joiner / disconnect isn't
+  handled). Fine for "both tabs open, then play."
+- Small race: if one client shoots before another finishes loading the course
+  (GameSync is created after the GLB loads), the slow client can miss that shot.
+  Mitigate by creating GameSync earlier or buffering pre-load messages.
 **Written:** 2026-07-22
 **Repo:** clone of `OpenGolfSim/fuse` @ `6f10092` (`fix: short chip physics (#14)`)
 
