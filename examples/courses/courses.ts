@@ -25,6 +25,7 @@ import {
   AudioPlayer,
   SkyBox,
   CourseLightOptions,
+  NetClient,
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
@@ -564,10 +565,40 @@ async function initializeDebug() {
   }
   gameContext.setupData = generateSetupData(1);
   gameContext.gameData = { id: 'web', courseUrl, gameMode: 2 };
+
+  // Phase 1 multiplayer smoke test: pass ?room=<code> (and optionally
+  // &server=host:port &secret=...) to join a relay and log the roster. This is
+  // independent of the 3D scene loading below — no CourseGame wiring yet.
+  const room = params.get('room');
+  if (room) {
+    connectMultiplayer(room, courseUrl, params);
+  }
+
   if (courseUrl) {
     preLoad();
   }
   document.getElementById('debug-message')?.setAttribute('style', 'display: block;');
+}
+
+function connectMultiplayer(room: string, courseUrl: string, params: URLSearchParams) {
+  const server = params.get('server') || 'localhost:8080';
+  const net = new NetClient(`ws://${server}`, {
+    roomCode: room,
+    roomSecret: params.get('secret') || '',
+    courseUrl,
+    players: gameContext.setupData?.players || [],
+  });
+  net.on('open', () => console.log('[net] connected, joining room', room));
+  net.on('joined', (m) => console.log('[net] joined as', m.clientId));
+  net.on('roster', (m) =>
+    console.log('[net] roster:', m.roster.map((p) => `${p.id} (${p.name})`))
+  );
+  net.on('turn', (m) => console.log('[net] turn:', m.playerId, 'hole', m.holeNumber));
+  net.on('error', (msg) => console.warn('[net] error:', msg));
+  net.on('close', () => console.log('[net] disconnected'));
+  net.connect();
+  // expose for manual poking in the console
+  (window as any).ogsNet = net;
 }
 
 // listen for setup event from OpenGolfSim app

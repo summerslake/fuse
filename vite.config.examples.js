@@ -36,5 +36,29 @@ export default defineConfig({
         };
       },
     },
+    {
+      // Host the multiplayer relay in-process, so `npm run dev` both serves the
+      // game and hosts the room. Fails soft if server/ deps aren't installed.
+      name: 'ogs-mp-relay',
+      async configureServer(server) {
+        const port = Number(process.env.OGS_MP_PORT || 8080);
+        const secret = process.env.OGS_MP_SECRET || '';
+        try {
+          const { createRelay } = await import('./server/relay.js');
+          const relay = createRelay({ port, secret });
+          await relay.ready;
+          server.httpServer?.once('close', () => relay.close());
+          console.log(
+            `    Multiplayer relay: ws://localhost:${port}` +
+              (secret ? '' : '  (no OGS_MP_SECRET — LAN/dev only)') +
+              '\n'
+          );
+        } catch (err) {
+          console.warn(
+            `    ⚠  multiplayer relay not started (run \`npm install\` in server/): ${err.message}\n`
+          );
+        }
+      },
+    },
   ],
 });
