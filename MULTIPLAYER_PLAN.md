@@ -1,12 +1,14 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
-- ✅ **Phase 3 done** (2026-07-23) — `GameSync` (`src/net/gameSync.ts`) wires
-  `NetClient` ↔ `CourseGame`; `courses.ts` builds the game from the server roster
-  and locks input off-turn. Commits `ffdf728` (CourseGame networked mode),
-  `1b7d091` (GameSync), `e8cdf43` (examples). 33 vitest tests pass, incl. a
-  headless two-client full-round sync test through a real relay. Browser two-tab
-  round NOT yet run by a human (see below).
+- ✅ **Phase 3 done + browser-verified** (2026-07-23) — `GameSync`
+  (`src/net/gameSync.ts`) wires `NetClient` ↔ `CourseGame`; `courses.ts` builds
+  the game from the server roster and locks input off-turn. Commits `ffdf728`,
+  `1b7d091`, `e8cdf43`. 33 vitest tests pass incl. a headless two-client
+  full-round sync test through a real relay. **Confirmed live in Chrome (two tabs,
+  real WebGPU render):** roster gating (waited 1/2, started at 2), Lake's shot
+  received on Brett's client, off-turn input blocked, `hole_complete` → both tabs
+  advanced the turn and flipped the active player, lock reversed. Works.
 - ✅ **Phase 2 done** — `CourseGame` refactor + ownership.
 - ✅ **Phase 1 done** — relay server + `NetClient` + in-process relay.
 - Desktop empirical spike (needs the app + a Square) still pending; not a blocker.
@@ -19,6 +21,15 @@
 active tab; the other should stay locked out and its scorecard should track. Ghost
 balls come in Phase 4, so remote shots currently update the scorecard with no ball
 flight.
+
+**Dev testing gotcha (not a production bug):** with `npm run dev`, the first page
+load can trigger a vite dependency re-optimization that HMR-reloads *all* open
+tabs mid-session, re-executing the entry module and leaving duplicate
+NetClient/renderer instances (seen as double "joined"/"starting" logs). Cause: a
+second tab pulling a not-yet-optimized dep. Avoid it by loading one tab first to
+warm the optimizer, then hard-reloading both before testing — or restart the dev
+server (which also clears relay room state) and load tabs one at a time. Doesn't
+affect a built deploy (no HMR). `setupMultiplayer` isn't HMR-safe; low priority.
 
 **Two known Phase-3 gaps to close in Phase 5:**
 - Live roster changes after start are ignored (a late joiner / disconnect isn't
