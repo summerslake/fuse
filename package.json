@@ -6,7 +6,7 @@
   "main": "dist/module/fuse.js",
   "module": "dist/module/fuse.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
     "prepare": "npm run build:lib && npm run build:examples",
     "build": "npm run build:lib && npm run build:examples",
     "build:lib": "vite build --config vite.config.js",
@@ -37,6 +37,7 @@
     "serve": "^14.2.6",
     "typescript": "^6.0.3",
     "vite": "^6.4.2",
-    "vite-plugin-dts": "^4.5.4"
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^2.1.9"
   }
 }
