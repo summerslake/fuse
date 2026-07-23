@@ -26,6 +26,7 @@ import {
   SkyBox,
   CourseLightOptions,
   NetClient,
+  GameSync,
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
@@ -72,6 +73,11 @@ const gameContext: {
     scorecard?: UIScorecard,
     hazard?: UIHazardDialog,
   },
+  // Multiplayer
+  net?: NetClient,
+  gameSync?: GameSync,
+  clientId?: string,
+  localPlayerIds?: string[],
   // State
   distanceToAim: number,
   heightToAim: number,
@@ -94,6 +100,12 @@ const defaultCloudColor = 'rgb(255, 255, 255)';
 
 function launchShot(shot: OpenGolfSim.Shot) {
   if (!gameContext.golfBall) return;
+
+  // Multiplayer: block input when it isn't one of our players' turn.
+  if (gameContext.net && gameContext.game && !gameContext.game.isLocalTurn) {
+    console.log('[net] not your turn — shot ignored');
+    return;
+  }
 
   if (shot.ballSpeed && !gameContext.golfBall.isShotActive) {
     gameContext.shotData?.updateShotData(shot);
@@ -400,7 +412,16 @@ async function setupCourse() {
   
   console.log('Setup game logic...');
   // setup course game controller
-  gameContext.game = new CourseGame(gameContext.course, gameContext.golfBall, { setupData: gameContext.setupData });
+  gameContext.game = new CourseGame(gameContext.course, gameContext.golfBall, {
+    setupData: gameContext.setupData,
+    localPlayerIds: gameContext.localPlayerIds,
+    networked: !!gameContext.net,
+  });
+  // In multiplayer, GameSync routes shots through the relay and applies them on
+  // the echo (CourseGame's built-in ball adapter is off when networked).
+  if (gameContext.net) {
+    gameContext.gameSync = new GameSync(gameContext.game, gameContext.net, gameContext.golfBall);
+  }
   gameContext.game?.on('nextShot', (player) => {
     console.log(`A new player (${player.name}) is up!`);
     setupNextShot();
@@ -564,41 +585,71 @@ async function initializeDebug() {
     throw new Error('No courseUrl provided');
   }
   gameContext.setupData = generateSetupData(1);
+  // let ?name= rename the local player so tabs are distinguishable
+  const name = params.get('name');
+  if (name && gameContext.setupData.players[0]) {
+    gameContext.setupData.players[0].name = name;
+  }
   gameContext.gameData = { id: 'web', courseUrl, gameMode: 2 };
 
-  // Phase 1 multiplayer smoke test: pass ?room=<code> (and optionally
-  // &server=host:port &secret=...) to join a relay and log the roster. This is
-  // independent of the 3D scene loading below — no CourseGame wiring yet.
+  // Multiplayer: ?room=<code> (+ optional &server=host:port &secret= &name=
+  // &expect=N). The game starts once the roster reaches `expect` players.
+  // Single-machine (no ?room) loads immediately as before.
   const room = params.get('room');
   if (room) {
-    connectMultiplayer(room, courseUrl, params);
-  }
-
-  if (courseUrl) {
+    setupMultiplayer(room, courseUrl, params);
+  } else {
     preLoad();
   }
   document.getElementById('debug-message')?.setAttribute('style', 'display: block;');
 }
 
-function connectMultiplayer(room: string, courseUrl: string, params: URLSearchParams) {
+/**
+ * Connect to the relay and, once enough players are present, build the game from
+ * the SERVER roster (so every client shares one player list and turn order).
+ * The actual shot/turn wiring lives in GameSync, created in setupCourse.
+ */
+function setupMultiplayer(room: string, courseUrl: string, params: URLSearchParams) {
   const server = params.get('server') || 'localhost:8080';
+  const expect = parseInt(params.get('expect') || '2', 10);
   const net = new NetClient(`ws://${server}`, {
     roomCode: room,
     roomSecret: params.get('secret') || '',
     courseUrl,
     players: gameContext.setupData?.players || [],
   });
+  gameContext.net = net;
+  (window as any).ogsNet = net;
+
+  let started = false;
   net.on('open', () => console.log('[net] connected, joining room', room));
-  net.on('joined', (m) => console.log('[net] joined as', m.clientId));
-  net.on('roster', (m) =>
-    console.log('[net] roster:', m.roster.map((p) => `${p.id} (${p.name})`))
-  );
+  net.on('joined', (m) => {
+    gameContext.clientId = m.clientId;
+    console.log('[net] joined as', m.clientId);
+  });
   net.on('turn', (m) => console.log('[net] turn:', m.playerId, 'hole', m.holeNumber));
   net.on('error', (msg) => console.warn('[net] error:', msg));
   net.on('close', () => console.log('[net] disconnected'));
+
+  net.on('roster', (m) => {
+    console.log(`[net] roster (${m.roster.length}):`, m.roster.map((p) => `${p.id} (${p.name})`));
+    if (started) {
+      console.warn('[net] roster changed after start — live join/leave is Phase 5');
+      return;
+    }
+    if (m.roster.length < expect) {
+      console.log(`[net] waiting for players (${m.roster.length}/${expect})…`);
+      return;
+    }
+    started = true;
+    // Replace our local player list with the full server roster (namespaced ids).
+    gameContext.setupData!.players = m.roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs }));
+    gameContext.localPlayerIds = m.roster.filter((p) => p.ownerId === gameContext.clientId).map((p) => p.id);
+    console.log('[net] starting — this client owns', gameContext.localPlayerIds);
+    preLoad();
+  });
+
   net.connect();
-  // expose for manual poking in the console
-  (window as any).ogsNet = net;
 }
 
 // listen for setup event from OpenGolfSim app
