@@ -568,16 +568,11 @@ round with Brett — without it, a stray swing corrupts the shared scorecard.
       scorecard. Undefined in MP. Decide later.
 - [ ] `switchHole()` via `UICourseMap` (`courses.ts`, `on('holeChange')`) lets a
       player jump holes freely. Must be disabled or server-driven in MP.
-- [ ] **Suspected hole-out scoring bug (found during Phase 2).** In
-      `applyShotResult`, the `isHoled` branch runs its finalize `_addStrokes`
-      *after* `_nextPlayer()`, so it targets the next player and writes them a `0`
-      hole-score — which `hasFinishedHole()` then treats as "finished". Rarely
-      hit because putting-disabled holes usually end via the green/auto-putt
-      branch, not a literal hole-out. Preserved verbatim in the Phase 2 refactor
-      and pinned by a test (`test/game.test.ts`, "documented current behavior").
-      Fix deliberately (own commit) before real scoring matters — the fix will
-      corrupt fewer multiplayer scorecards. Likely correct behavior: finalize the
-      shooter, then rotate.
+- [x] ~~**Hole-out scoring bug (found during Phase 2).**~~ **Fixed** 2026-07-23.
+      The `isHoled` finalize ran *after* `_nextPlayer()`, scoring the next player
+      a spurious `0` (which `hasFinishedHole()` treated as "finished"). Reordered
+      to finalize the shooter then rotate, matching the green/auto-putt branch.
+      Regression test in `test/game.test.ts`.
 
 ---
 

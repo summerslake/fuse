@@ -178,14 +178,23 @@ describe('CourseGame — setTurn (network-driven, unused until Phase 3)', () => 
   });
 });
 
-describe('CourseGame — documented current behavior of the hole-out branch', () => {
-  // Pins the KNOWN-QUIRKY behavior preserved from main: because the hole-out
-  // finalize runs after _nextPlayer(), it writes a 0 hole-score for the *next*
-  // player. This test documents (not endorses) it; a deliberate fix should
-  // update this expectation. See MULTIPLAYER_PLAN open items.
-  it('holing out writes a spurious 0 for the next player (main behavior, preserved)', () => {
+describe('CourseGame — hole-out branch', () => {
+  // Regression test for the fixed hole-out bug: the finalize used to run after
+  // _nextPlayer(), scoring the NEXT player a spurious 0. It must finalize the
+  // shooter and leave the next player untouched.
+  it('holing out finalizes the shooter and does not touch the next player', () => {
     const g = makeGame();
+    // p1 aces the par-3 hole 1 (holes out on the first shot)
     g.applyShotResult('p1', { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true });
-    expect(player(g, 'p2').scorecard.get('1')).toBe(0);
+
+    const p1 = player(g, 'p1');
+    expect(p1.scorecard.get('1')).toBe(1);           // one stroke, the ace
+    expect(p1.toPar).toBe(-2);                       // 1 on a par 3
+    expect(p1.disabled).toBe(true);
+    expect(g.activePlayer.id).toBe('p2');            // rotated to next player
+
+    const p2 = player(g, 'p2');
+    expect(p2.scorecard.has('1')).toBe(false);       // NOT marked finished
+    expect(p2.toPar).toBe(0);
   });
 });

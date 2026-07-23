@@ -209,15 +209,14 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       player.start.copy(result.endPosition);
       // hack greens as done
       if (result.isHoled) {
+        console.log(`Ball in hole! End hole`);
+        // Finalize the shooter's hole score BEFORE rotating. (main did this
+        // after _nextPlayer(), which finalized the next player and wrote them a
+        // spurious 0 hole-score — see git history / the fixed test.) Matches the
+        // order the green/auto-putt branch below already uses.
+        this._addStrokes(player, 0, true);
         player.disabled = true;
         this._nextPlayer();
-        console.log(`Ball in hole! End hole`);
-        // NOTE: preserving main's exact behavior — this finalize runs AFTER
-        // _nextPlayer(), so it targets this.activePlayer (the *next* player),
-        // not the shooter. Suspected latent bug (writes a 0 hole-score for the
-        // next player, which hasFinishedHole() then treats as finished); kept
-        // as-is so Phase 2 is a pure extraction. See MULTIPLAYER_PLAN open items.
-        this._addStrokes(this.activePlayer, 0, true);
       } else if (result.surface?.type === 'green' && !this.puttingEnabled) {
         // total score
         // TODO: change to add auto-putt number
