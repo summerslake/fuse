@@ -1,13 +1,20 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
-- ✅ **Phase 2 done** (2026-07-23) — `CourseGame` refactor + ownership, commits
-  `360db6c` (refactor) / `9c55b3c` (tests). 12 vitest tests pass (`npm test`);
-  single-machine behavior verified unchanged. Repo now has a test harness.
+- ✅ **Phase 1 done** (2026-07-23) — relay server (`server/`) + `NetClient`
+  (`src/net/`) + in-process relay via the vite plugin + `?room` join glue.
+  Commits `de0e5e5` (net layer + tests), `d36a1c3` (examples wiring). 28 vitest
+  tests pass, incl. an end-to-end NetClient↔relay suite; verified live against
+  `npm run dev` (relay on :8080). Hole-out fix also landed (`4f04866`).
+- ✅ **Phase 2 done** (2026-07-23) — `CourseGame` refactor + ownership
+  (`applyShotResult`, `localPlayerIds`/`isLocalTurn`/`setTurn`).
 - Desktop static spike done; an *empirical* spike (needs the running app + a
   Square) is still pending — see "How OGS Desktop runs fuse". Not a blocker for
-  Phases 1/3–4 (browser + keyboard).
-- **Next:** Phase 1 (relay + net client), then Phase 3 wiring.
+  Phase 3 (browser + keyboard).
+- **Next: Phase 3** — wire `NetClient` ↔ `CourseGame` in `courses.ts`: local
+  `shotEnded` → `sendShotResult` → `shot` broadcast → `applyShotResult` on every
+  client; `hole_complete` → `turn` → `setTurn`. Roster from the server instead of
+  `setupData.players`. Target: two tabs play a real keyboard round.
 **Written:** 2026-07-22
 **Repo:** clone of `OpenGolfSim/fuse` @ `6f10092` (`fix: short chip physics (#14)`)
 
