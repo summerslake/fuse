@@ -178,6 +178,62 @@ describe('CourseGame — setTurn (network-driven, unused until Phase 3)', () => 
   });
 });
 
+describe('CourseGame — networked mode (advanceTurn:false)', () => {
+  it('does not wire the ball adapter when networked, so shots must be applied explicitly', () => {
+    const g = new CourseGame(makeCourse(), fakeBall, {
+      setupData: makeSetup(['p1', 'p2']) as any,
+      networked: true,
+    });
+    expect(g.networked).toBe(true);
+    // nothing applied yet
+    expect(player(g, 'p1').scorecard.size).toBe(0);
+  });
+
+  it('scores without rotating and reports holeFinished', () => {
+    const g = new CourseGame(makeCourse(), fakeBall, {
+      setupData: makeSetup(['p1', 'p2']) as any,
+      networked: true,
+    });
+    // fairway lie: not finished, same player, no rotation
+    let out = g.applyShotResult('p1', fairway(50), { advanceTurn: false });
+    expect(out.holeFinished).toBe(false);
+    expect(g.activePlayer.id).toBe('p1');
+    expect(player(g, 'p1').scorecard.get('1')).toBe(1);
+
+    // reaches green: finished, but turn does NOT advance (server will drive it)
+    out = g.applyShotResult('p1', green(148), { advanceTurn: false });
+    expect(out.holeFinished).toBe(true);
+    expect(g.activePlayer.id).toBe('p1');          // NOT rotated
+    expect(player(g, 'p1').disabled).toBe(true);
+    expect(player(g, 'p1').scorecard.get('1')).toBe(3);
+  });
+
+  it('setTurn resets positions and re-enables players on a hole change', () => {
+    const g = new CourseGame(makeCourse(), fakeBall, {
+      setupData: makeSetup(['p1', 'p2']) as any,
+      networked: true,
+    });
+    // finish hole 1 for both (no rotation in networked mode)
+    g.applyShotResult('p1', green(149), { advanceTurn: false });
+    g.applyShotResult('p2', green(149), { advanceTurn: false });
+    expect(player(g, 'p1').disabled).toBe(true);
+    expect(player(g, 'p2').disabled).toBe(true);
+
+    // server moves everyone to hole 2, first player up
+    g.setTurn('p1', '2');
+    expect(g.activeHole.number).toBe('2');
+    expect(g.activePlayer.id).toBe('p1');
+    expect(player(g, 'p1').disabled).toBe(false);  // re-enabled
+    expect(player(g, 'p2').disabled).toBe(false);
+
+    // a same-hole turn change must NOT reset positions
+    player(g, 'p1').start.set(9, 9, 9);
+    g.setTurn('p2', '2');
+    expect(g.activePlayer.id).toBe('p2');
+    expect(player(g, 'p1').start.x).toBe(9);       // untouched
+  });
+});
+
 describe('CourseGame — hole-out branch', () => {
   // Regression test for the fixed hole-out bug: the finalize used to run after
   // _nextPlayer(), scoring the NEXT player a spurious 0. It must finalize the

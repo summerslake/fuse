@@ -27,17 +27,33 @@ type CourseGameOptions = {
    * players it owns.
    */
   localPlayerIds?: string[],
+  /**
+   * Multiplayer mode. When true, the local ball's shotEnded does NOT auto-apply
+   * scoring — the network layer (GameSync) routes every shot through the server
+   * and calls applyShotResult on the echo, so local and remote shots share one
+   * path. Turn advance comes from the server (setTurn), not from applyShotResult.
+   */
+  networked?: boolean,
 }
 
 /**
  * The outcome of a completed shot expressed as plain data — no reference to the
  * local `GolfBall`. This is what `applyShotResult` consumes, so the same scoring
  * path serves both a locally simulated shot and one replayed from the network.
+ * `surface` is intentionally only `{ type }` — that's all scoring reads, and it
+ * keeps the network payload small (a full CourseSurfaceProperties also satisfies
+ * this).
  */
 export type ShotResultInput = {
   endPosition: THREE.Vector3,
-  surface?: CourseSurfaceProperties,
+  surface?: Pick<CourseSurfaceProperties, 'type'>,
   isHoled: boolean,
+}
+
+/** What applyShotResult reports back to the caller. */
+export type ShotResultOutcome = {
+  /** true if this shot completed the player's hole (holed out or green auto-putt) */
+  holeFinished: boolean,
 }
 
 export class CourseGame extends EventEmitter<CourseGameEvents> {
@@ -53,6 +69,8 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
   gimmeDistances: number[];
   /** Players this client owns. See CourseGameOptions.localPlayerIds. */
   localPlayerIds: Set<string>;
+  /** Multiplayer mode. See CourseGameOptions.networked. */
+  networked: boolean;
   #orderedHoles: Hole[];
   // #playerData: Map<string, PlayerState>;
 
@@ -67,6 +85,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
     // default: own every player (single-machine play), so isLocalTurn is always true
     this.localPlayerIds = new Set(options?.localPlayerIds ?? this.players.map(p => p.id));
+    this.networked = !!options?.networked;
 
     this.currentPlayerIndex = 0;
     this.currentHoleIndex = 0;
@@ -79,19 +98,22 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     this.activeHole = this.#orderedHoles[this.currentHoleIndex];
     // this.#playerData = new Map();
 
-    // Adapter: read the local ball's final state and hand it to the shared
-    // scoring path as plain data. In multiplayer a network result calls
-    // applyShotResult directly with the same shape.
-    this.golfBall.on('shotEnded', (details) => {
-      if (!this.golfBall.object) {
-        throw new Error('GolfBall object not found');
-      }
-      this.applyShotResult(this.activePlayer.id, {
-        endPosition: this.golfBall.object.position.clone(),
-        surface: details.surface,
-        isHoled: details.isHoled,
+    // Single-machine: the local ball's final state feeds the shared scoring path
+    // directly. In networked mode this adapter is OFF — GameSync routes every
+    // shot through the server and calls applyShotResult on the echo, so local
+    // and remote shots share one path.
+    if (!this.networked) {
+      this.golfBall.on('shotEnded', (details) => {
+        if (!this.golfBall.object) {
+          throw new Error('GolfBall object not found');
+        }
+        this.applyShotResult(this.activePlayer.id, {
+          endPosition: this.golfBall.object.position.clone(),
+          surface: details.surface,
+          isHoled: details.isHoled,
+        });
       });
-    });
+    }
 
     // setup first hole
     this._setupHole();
@@ -179,15 +201,27 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
   /**
    * Apply a completed shot to game state from plain data. Called by the local
-   * ball's shotEnded adapter today; in multiplayer a network result calls it
-   * directly with the same shape. No reference to the local GolfBall.
+   * ball's shotEnded adapter (single-machine) or by GameSync on a network echo
+   * (multiplayer) — same shape either way. No reference to the local GolfBall.
    *
    * Turn-based invariant: the shot belongs to the player whose turn it is, so
    * `playerId` is expected to be the active player. We resolve the shooter from
    * `playerId` (rather than assuming activePlayer) so out-of-order network
-   * results score the right player; rotation still advances from activePlayer.
+   * results score the right player.
+   *
+   * @param opts.advanceTurn  When true (default, single-machine), a finished
+   *   hole rotates to the next player locally. When false (multiplayer), scoring
+   *   happens but the turn does NOT advance here — the server decides the next
+   *   turn and GameSync calls setTurn. In that mode nextShot is emitted only when
+   *   the same player keeps shooting (hole not finished).
+   * @returns whether this shot finished the player's hole.
    */
-  applyShotResult(playerId: string, result: ShotResultInput) {
+  applyShotResult(
+    playerId: string,
+    result: ShotResultInput,
+    opts: { advanceTurn?: boolean } = {},
+  ): ShotResultOutcome {
+    const advanceTurn = opts.advanceTurn ?? true;
     const player = this.players.find(p => p.id === playerId);
     if (!player) {
       throw new Error(`applyShotResult: no player with id ${playerId}`);
@@ -205,19 +239,19 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     }
     player.previousStart.copy(player.start);
 
+    let holeFinished = false;
     if (!this.practiceMode) {
       player.start.copy(result.endPosition);
       // hack greens as done
       if (result.isHoled) {
+        holeFinished = true;
         console.log(`Ball in hole! End hole`);
-        // Finalize the shooter's hole score BEFORE rotating. (main did this
-        // after _nextPlayer(), which finalized the next player and wrote them a
-        // spurious 0 hole-score — see git history / the fixed test.) Matches the
-        // order the green/auto-putt branch below already uses.
+        // Finalize the shooter's hole score, then (single-machine) rotate.
         this._addStrokes(player, 0, true);
         player.disabled = true;
-        this._nextPlayer();
+        if (advanceTurn) this._nextPlayer();
       } else if (result.surface?.type === 'green' && !this.puttingEnabled) {
+        holeFinished = true;
         // total score
         // TODO: change to add auto-putt number
         const holePos = this.activeHole.waypoints.get('pin');
@@ -233,13 +267,19 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
         // disable player when they finish a hole (so they are not selectable in UI)
         player.disabled = true;
-        this._nextPlayer();
+        if (advanceTurn) this._nextPlayer();
       }
     }
 
+    // Emit nextShot to reconfigure the scene for whoever is now active. In
+    // networked mode, a FINISHED hole waits for the server's turn -> setTurn
+    // instead (so we don't set up the finished player to shoot again).
+    if (advanceTurn || !holeFinished) {
+      this.updateAimPoint(this.activePlayer.start);
+      this.emit('nextShot', this.activePlayer);
+    }
 
-    this.updateAimPoint(this.activePlayer.start);
-    this.emit('nextShot', this.activePlayer);
+    return { holeFinished };
   }
 
   switchHole(hole: Hole) {
@@ -329,11 +369,14 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       console.warn(`setTurn: unknown player ${playerId}`);
       return;
     }
-    if (holeNumber !== undefined) {
+    // A hole change means every player moves to the new tee — reset positions
+    // and re-enable them, same as _nextHole does in single-machine play.
+    if (holeNumber !== undefined && holeNumber !== this.activeHole.number) {
       const holeIndex = this.#orderedHoles.findIndex(h => h.number === holeNumber);
       if (holeIndex > -1) {
         this.currentHoleIndex = holeIndex;
         this.activeHole = this.#orderedHoles[this.currentHoleIndex];
+        this._setupHole();
       }
     }
     this.currentPlayerIndex = playerIndex;
