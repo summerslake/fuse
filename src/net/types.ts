@@ -25,10 +25,16 @@ export interface RoomSnapshot {
 }
 
 /**
- * Payload of a completed shot sent across the wire. Refined in Phase 4 (ghost
- * balls) — kept loose for now so Phase 1/3 don't over-commit the shape.
+ * Payload of a completed shot sent across the wire — enough to score it on every
+ * client. Phase 4 (ghost balls) will add the sample arrays for replay.
  */
-export type NetShotResult = Record<string, unknown>;
+export interface NetShotResult {
+  /** ball resting position [x, y, z] */
+  endPosition: [number, number, number];
+  /** surface the ball came to rest on; only `type` is needed for scoring */
+  surface?: { type?: string };
+  isHoled: boolean;
+}
 
 // ---- client -> server ----
 

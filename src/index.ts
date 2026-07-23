@@ -38,6 +38,7 @@ export * from '@/utils/data';
 
 // Networking (multiplayer)
 export * from '@/net/client';
+export * from '@/net/gameSync';
 export * from '@/net/types';
 
 import '@/css/base.css';
