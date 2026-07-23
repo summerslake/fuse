@@ -1,0 +1,13 @@
+{
+  "name": "ogs-mp-relay",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Relay server for FUSE remote multiplayer — owns room roster and turn order",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

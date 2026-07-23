@@ -36,6 +36,10 @@ export * from '@/ui';
 export * from '@/utils/units';
 export * from '@/utils/data';
 
+// Networking (multiplayer)
+export * from '@/net/client';
+export * from '@/net/types';
+
 import '@/css/base.css';
 
 export const app = new AppBridge();
