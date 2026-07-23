@@ -1,8 +1,13 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
-**Status:** Desktop static spike done (2026-07-23); an *empirical* spike (needs
-the running app + a Square) is the gating first task — see "How OGS Desktop runs
-fuse". Phases 1 & 2 follow.
+**Status:**
+- ✅ **Phase 2 done** (2026-07-23) — `CourseGame` refactor + ownership, commits
+  `360db6c` (refactor) / `9c55b3c` (tests). 12 vitest tests pass (`npm test`);
+  single-machine behavior verified unchanged. Repo now has a test harness.
+- Desktop static spike done; an *empirical* spike (needs the running app + a
+  Square) is still pending — see "How OGS Desktop runs fuse". Not a blocker for
+  Phases 1/3–4 (browser + keyboard).
+- **Next:** Phase 1 (relay + net client), then Phase 3 wiring.
 **Written:** 2026-07-22
 **Repo:** clone of `OpenGolfSim/fuse` @ `6f10092` (`fix: short chip physics (#14)`)
 
@@ -563,6 +568,16 @@ round with Brett — without it, a stray swing corrupts the shared scorecard.
       scorecard. Undefined in MP. Decide later.
 - [ ] `switchHole()` via `UICourseMap` (`courses.ts`, `on('holeChange')`) lets a
       player jump holes freely. Must be disabled or server-driven in MP.
+- [ ] **Suspected hole-out scoring bug (found during Phase 2).** In
+      `applyShotResult`, the `isHoled` branch runs its finalize `_addStrokes`
+      *after* `_nextPlayer()`, so it targets the next player and writes them a `0`
+      hole-score — which `hasFinishedHole()` then treats as "finished". Rarely
+      hit because putting-disabled holes usually end via the green/auto-putt
+      branch, not a literal hole-out. Preserved verbatim in the Phase 2 refactor
+      and pinned by a test (`test/game.test.ts`, "documented current behavior").
+      Fix deliberately (own commit) before real scoring matters — the fix will
+      corrupt fewer multiplayer scorecards. Likely correct behavior: finalize the
+      shooter, then rotate.
 
 ---
 
