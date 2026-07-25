@@ -245,6 +245,32 @@ testRelay();
 // -------------------------------------------------------------------- setup
 
 const setup = el('setup');
+
+/**
+ * Does the host app re-send `setup` after a reload, or is it a one-shot push at
+ * navigation? This decides how multiplayer can start under Desktop: if setup
+ * comes back, the lobby can reload the page to rebuild the game from the server
+ * roster; if it doesn't, the game has to be rebuilt in place instead.
+ *
+ * A plain load counter isn't enough — relaunching the game from the library
+ * navigates the same renderer and would look identical. So mark the reload
+ * explicitly, and consume the mark on the way back in.
+ */
+const RELOAD_KEY = 'ogs.diag.reloaded-at';
+const reloadedAt = sessionStorage.getItem(RELOAD_KEY);
+sessionStorage.removeItem(RELOAD_KEY);
+if (reloadedAt) {
+  const secondsAgo = ((Date.now() - Number(reloadedAt)) / 1000).toFixed(1);
+  row(setup, 'This page load', `came from the Reload button ${secondsAgo}s ago — so the setup row below is the answer`);
+} else {
+  row(setup, 'This page load', 'launched by the host app (not a reload)');
+}
+el('reload').addEventListener('click', () => {
+  sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+  window.location.reload();
+});
+
+const pageLoadedAt = performance.now();
 const setupRow = row(setup, 'setup event', 'waiting for the host app…', 'pending');
 
 /**
@@ -260,7 +286,7 @@ el('send-ready').addEventListener('click', () => {
 });
 
 app.on('setup', (payload: any) => {
-  setRow(setupRow, 'received', 'pass');
+  setRow(setupRow, `received ${((performance.now() - pageLoadedAt) / 1000).toFixed(1)}s into this page load`, 'pass');
   const players = payload?.setupData?.players ?? [];
   row(setup, 'Players', players.length
     ? players.map((p: any) => `${p.name} (${p.clubs?.length ?? 0} clubs)`).join(', ')
