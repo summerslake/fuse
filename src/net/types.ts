@@ -5,7 +5,7 @@
  * Keep PROTOCOL_VERSION in sync with server/relay.js.
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** A roster player as the server tracks it: a Player with a namespaced id + owner. */
 export interface RosterPlayer {
@@ -20,8 +20,8 @@ export interface RoomSnapshot {
   code: string;
   courseUrl: string;
   roster: RosterPlayer[];
-  currentPlayerIndex: number;
-  currentHoleNumber: number;
+  /** true once the round is under way (the roster is frozen) */
+  started: boolean;
 }
 
 /**
@@ -71,11 +71,9 @@ export interface ShotLaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
-export interface HoleCompleteMessage {
-  type: 'hole_complete';
-  playerId: string;
-  holeNumber: string;
-  strokes: number;
+/** Close the lobby and start the round for everyone. Any client may send it. */
+export interface StartMessage {
+  type: 'start';
 }
 export interface LeaveMessage {
   type: 'leave';
@@ -84,7 +82,7 @@ export type ClientMessage =
   | JoinMessage
   | ShotResultMessage
   | ShotLaunchMessage
-  | HoleCompleteMessage
+  | StartMessage
   | LeaveMessage;
 
 // ---- server -> client ----
@@ -97,8 +95,7 @@ export interface JoinedMessage {
 export interface RosterMessage {
   type: 'roster';
   roster: RosterPlayer[];
-  currentPlayerIndex: number;
-  currentHoleNumber: number;
+  started: boolean;
 }
 export interface ShotMessage {
   type: 'shot';
@@ -110,10 +107,10 @@ export interface LaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
-export interface TurnMessage {
-  type: 'turn';
-  playerId: string | null;
-  holeNumber: string;
+/** The lobby closed — build the game from this (now frozen) roster. */
+export interface StartedMessage {
+  type: 'started';
+  roster: RosterPlayer[];
 }
 export interface ErrorMessage {
   type: 'error';
@@ -124,5 +121,5 @@ export type ServerMessage =
   | RosterMessage
   | ShotMessage
   | LaunchMessage
-  | TurnMessage
+  | StartedMessage
   | ErrorMessage;

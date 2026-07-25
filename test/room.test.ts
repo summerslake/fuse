@@ -35,47 +35,14 @@ describe('Room — roster & id namespacing', () => {
   });
 });
 
-describe('Room — turn advance (port of findNextPlayerUp)', () => {
-  function threePlayerRoom() {
-    const room = new Room('g');
+describe('Room — lobby state', () => {
+  it('reports started in the roster message and the snapshot', () => {
+    const room = new Room('g', 'course.glb');
     room.addClient('c1', fakeSocket(), players('a'));
-    room.addClient('c2', fakeSocket(), players('b'));
-    room.addClient('c3', fakeSocket(), players('c'));
-    return room; // roster: c1:a, c2:b, c3:c ; currentPlayerIndex 0
-  }
-
-  it('advances to the next player who has not finished the hole', () => {
-    const room = threePlayerRoom();
-    room.markHoleComplete('c1:a', '1');
-    const turn = room.advanceTurn();
-    expect(turn).toEqual({ playerId: 'c2:b', holeNumber: '1' });
-    expect(room.currentPlayerIndex).toBe(1);
-  });
-
-  it('skips players who have already finished the hole', () => {
-    const room = threePlayerRoom();
-    room.markHoleComplete('c1:a', '1');
-    room.markHoleComplete('c2:b', '1');
-    const turn = room.advanceTurn();
-    expect(turn.playerId).toBe('c3:c');
-  });
-
-  it('advances to the next hole and first player once everyone finishes', () => {
-    const room = threePlayerRoom();
-    for (const id of ['c1:a', 'c2:b', 'c3:c']) room.markHoleComplete(id, '1');
-    const turn = room.advanceTurn();
-    expect(turn).toEqual({ playerId: 'c1:a', holeNumber: '2' });
-    expect(room.currentHoleNumber).toBe(2);
-    expect(room.currentPlayerIndex).toBe(0);
-  });
-
-  it('allFinishedHole is only true when every roster player has finished', () => {
-    const room = threePlayerRoom();
-    room.markHoleComplete('c1:a', '1');
-    expect(room.allFinishedHole('1')).toBe(false);
-    room.markHoleComplete('c2:b', '1');
-    room.markHoleComplete('c3:c', '1');
-    expect(room.allFinishedHole('1')).toBe(true);
+    expect(room.rosterMessage().started).toBe(false);
+    room.started = true;
+    expect(room.rosterMessage().started).toBe(true);
+    expect(room.snapshot()).toMatchObject({ code: 'g', courseUrl: 'course.glb', started: true });
   });
 });
 

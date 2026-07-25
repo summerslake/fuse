@@ -31,7 +31,7 @@ type CourseGameOptions = {
    * Multiplayer mode. When true, the local ball's shotEnded does NOT auto-apply
    * scoring — the network layer (GameSync) routes every shot through the server
    * and calls applyShotResult on the echo, so local and remote shots share one
-   * path. Turn advance comes from the server (setTurn), not from applyShotResult.
+   * path. Turn order is still derived locally (identically on every client).
    */
   networked?: boolean,
 }
@@ -351,32 +351,6 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     }
   }
 
-  /**
-   * Set the active player/hole from an external source (the server's turn
-   * broadcast in multiplayer) WITHOUT running local scoring. Local play uses
-   * _nextPlayer instead; this is unused until Phase 3.
-   */
-  setTurn(playerId: string, holeNumber?: string) {
-    const playerIndex = this.players.findIndex(p => p.id === playerId);
-    if (playerIndex === -1) {
-      console.warn(`setTurn: unknown player ${playerId}`);
-      return;
-    }
-    // A hole change means every player moves to the new tee — reset positions
-    // and re-enable them, same as _nextHole does in single-machine play.
-    if (holeNumber !== undefined && holeNumber !== this.activeHole.number) {
-      const holeIndex = this.#orderedHoles.findIndex(h => h.number === holeNumber);
-      if (holeIndex > -1) {
-        this.currentHoleIndex = holeIndex;
-        this.activeHole = this.#orderedHoles[this.currentHoleIndex];
-        this._setupHole();
-      }
-    }
-    this.currentPlayerIndex = playerIndex;
-    this.activePlayer = this.players[this.currentPlayerIndex];
-    this.emit('nextShot', this.activePlayer);
-  }
-  
   autoSelectClub() {
     if (!this.golfBall.object) {
       console.error('No golf ball object!');

@@ -7,7 +7,7 @@ import {
   type RosterMessage,
   type ShotMessage,
   type LaunchMessage,
-  type TurnMessage,
+  type StartedMessage,
   type NetShotResult,
   type NetShotLaunch,
 } from './types';
@@ -27,7 +27,8 @@ interface NetClientEvents {
   shot: (msg: ShotMessage) => void;
   /** a player just swung — fly the same shot live (re-simulate) */
   launch: (msg: LaunchMessage) => void;
-  turn: (msg: TurnMessage) => void;
+  /** the lobby closed — the roster is final, build the game from it */
+  started: (msg: StartedMessage) => void;
   /** server-sent error (bad secret, version mismatch, courseUrl mismatch, …) */
   error: (message: string) => void;
   /** socket closed (a reconnect may follow unless close()/leave() was called) */
@@ -106,10 +107,14 @@ export class NetClient extends EventEmitter<NetClientEvents> {
       case 'launch':
         this.emit('launch', msg);
         break;
-      case 'turn':
-        this.emit('turn', msg);
+      case 'started':
+        this.emit('started', msg);
         break;
       case 'error':
+        // every server error is fatal to this join (bad secret, version
+        // mismatch, room started…) — retrying would just loop on it
+        this.#closedByUser = true;
+        clearTimeout(this.#reconnectTimer);
         this.emit('error', msg.message);
         break;
     }
@@ -138,8 +143,9 @@ export class NetClient extends EventEmitter<NetClientEvents> {
     this.#send({ type: 'shot_launch', playerId, launch });
   }
 
-  sendHoleComplete(playerId: string, holeNumber: string, strokes: number) {
-    this.#send({ type: 'hole_complete', playerId, holeNumber, strokes });
+  /** Close the lobby and start the round for everyone in the room. */
+  sendStart() {
+    this.#send({ type: 'start' });
   }
 
   /** Graceful exit: tell the server, close, and don't reconnect. */

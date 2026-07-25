@@ -6,7 +6,7 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CLIENTS_PER_ROOM = 8;
@@ -70,11 +70,11 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         room.broadcast({ type: 'launch', playerId: msg.playerId, launch: msg.launch });
         break;
       }
-      case 'hole_complete': {
-        if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
-        room.markHoleComplete(msg.playerId, msg.holeNumber);
-        const turn = room.advanceTurn();
-        room.broadcast({ type: 'turn', playerId: turn.playerId, holeNumber: turn.holeNumber });
+      case 'start': {
+        // Anyone in the lobby can start the round; the roster is frozen from here.
+        if (room.started) return;
+        room.started = true;
+        room.broadcast({ type: 'started', roster: room.roster });
         break;
       }
       case 'leave': {
@@ -117,6 +117,12 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
     }
     if (room.clients.size >= MAX_CLIENTS_PER_ROOM) {
       send(socket, { type: 'error', message: 'room is full' });
+      return;
+    }
+    if (room.started) {
+      // The roster is baked into every client's CourseGame once play begins, so
+      // a late joiner can't be added. (Rejoining after a dropout is Phase 5.)
+      send(socket, { type: 'error', message: 'that round has already started' });
       return;
     }
 

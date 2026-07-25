@@ -27,6 +27,8 @@ import {
   CourseLightOptions,
   NetClient,
   GameSync,
+  UILobby,
+  type UILobbyJoinParams,
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
@@ -76,8 +78,11 @@ const gameContext: {
   // Multiplayer
   net?: NetClient,
   gameSync?: GameSync,
+  lobby?: UILobby,
   clientId?: string,
   localPlayerIds?: string[],
+  /** true once the lobby closed and the round is under way */
+  roundStarted?: boolean,
   // true while the ball is flying a re-simulated remote shot (not a real local
   // shot) — GameSync must not report its landing as our own result
   replayingRemoteShot?: boolean,
@@ -646,65 +651,149 @@ async function initializeDebug() {
     gameContext.setupData.players[0].name = name;
   }
   gameContext.gameData = { id: 'web', courseUrl, gameMode: 2 };
+  document.getElementById('debug-message')?.setAttribute('style', 'display: block;');
 
-  // Multiplayer: ?room=<code> (+ optional &server=host:port &secret= &name=
-  // &expect=N). The game starts once the roster reaches `expect` players.
-  // Single-machine (no ?room) loads immediately as before.
-  const room = params.get('room');
-  if (room) {
-    setupMultiplayer(room, courseUrl, params);
+  // Multiplayer opens the lobby instead of loading straight into the course:
+  //   ?mp=1                 -> lobby, fill in the room code by hand
+  //   ?room=<code>          -> lobby, joined automatically
+  // (optional &server=host:port &secret= &name=). No ?room/?mp loads as before.
+  if (params.get('room') || params.get('mp') === '1') {
+    openLobby(courseUrl, params);
   } else {
     preLoad();
   }
-  document.getElementById('debug-message')?.setAttribute('style', 'display: block;');
+}
+
+const LOBBY_STORAGE_KEY = 'ogs.lobby';
+
+/** Remember the last name/room/server so rejoining is one click. */
+function rememberLobby(values: UILobbyJoinParams) {
+  try {
+    const { name, room, server } = values; // never persist the secret
+    localStorage.setItem(LOBBY_STORAGE_KEY, JSON.stringify({ name, room, server }));
+  } catch { /* private mode — prefills just won't stick */ }
+}
+function recallLobby(): Partial<UILobbyJoinParams> {
+  try {
+    return JSON.parse(localStorage.getItem(LOBBY_STORAGE_KEY) || '{}');
+  } catch {
+    return {};
+  }
 }
 
 /**
- * Connect to the relay and, once enough players are present, build the game from
- * the SERVER roster (so every client shares one player list and turn order).
- * The actual shot/turn wiring lives in GameSync, created in setupCourse.
+ * Show the multiplayer lobby: pick a name + room, watch players arrive, start
+ * the round together, and leave again. Query params only seed the form.
  */
-function setupMultiplayer(room: string, courseUrl: string, params: URLSearchParams) {
-  const server = params.get('server') || 'localhost:8080';
-  const expect = parseInt(params.get('expect') || '2', 10);
-  const net = new NetClient(`ws://${server}`, {
-    roomCode: room,
-    roomSecret: params.get('secret') || '',
+function openLobby(courseUrl: string, params: URLSearchParams) {
+  const saved = recallLobby();
+  const lobby = new UILobby(document.body, {
+    courseName: courseUrl.split('/').pop(),
+    defaults: {
+      name: params.get('name') || saved.name || '',
+      room: params.get('room') || saved.room || '',
+      server: params.get('server') || saved.server || 'localhost:8080',
+      secret: params.get('secret') || '',
+    },
+  });
+  gameContext.lobby = lobby;
+  document.body.style.opacity = '1'; // preLoad normally does this, but that's post-Start
+
+  lobby.on('join', (values) => joinRoom(values, courseUrl));
+  lobby.on('start', () => gameContext.net?.sendStart());
+  lobby.on('leave', () => leaveRoom());
+  lobby.open();
+
+  // ?room= means "I already know where I'm going" — connect straight away.
+  if (params.get('room') && lobby.values.name) {
+    joinRoom(lobby.values, courseUrl);
+  }
+}
+
+/**
+ * Connect to the relay and sit in the lobby. When someone hits Start the server
+ * broadcasts the final roster and we build the game from it, so every client
+ * shares one player list (and therefore one turn order). The shot wiring lives
+ * in GameSync, created in setupCourse.
+ */
+function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
+  const lobby = gameContext.lobby;
+  rememberLobby(values);
+
+  // One field, comma separated, covers the garage case: "Lake, Sarah" seats two
+  // local players on this machine — both owned by (and played from) this client.
+  const names = values.name.split(',').map((n) => n.trim()).filter(Boolean);
+  const setupData = generateSetupData(names.length || 1);
+  names.forEach((n, i) => { setupData.players[i].name = n; });
+  gameContext.setupData = setupData;
+
+  const net = new NetClient(`ws://${values.server}`, {
+    roomCode: values.room,
+    roomSecret: values.secret,
     courseUrl,
-    players: gameContext.setupData?.players || [],
+    players: setupData.players,
   });
   gameContext.net = net;
   (window as any).ogsNet = net;
+  lobby?.setConnecting(values.room);
 
-  let started = false;
-  net.on('open', () => console.log('[net] connected, joining room', room));
+  net.on('open', () => console.log('[net] connected, joining room', values.room));
   net.on('joined', (m) => {
     gameContext.clientId = m.clientId;
     console.log('[net] joined as', m.clientId);
   });
-  net.on('turn', (m) => console.log('[net] turn:', m.playerId, 'hole', m.holeNumber));
-  net.on('error', (msg) => console.warn('[net] error:', msg));
-  net.on('close', () => console.log('[net] disconnected'));
+  net.on('error', (msg) => {
+    console.warn('[net] error:', msg);
+    lobby?.setError(msg);
+  });
+  net.on('close', () => {
+    console.log('[net] disconnected');
+    if (!gameContext.roundStarted) lobby?.setError('Disconnected from the relay.');
+  });
 
   net.on('roster', (m) => {
     console.log(`[net] roster (${m.roster.length}):`, m.roster.map((p) => `${p.id} (${p.name})`));
-    if (started) {
-      console.warn('[net] roster changed after start — live join/leave is Phase 5');
-      return;
-    }
-    if (m.roster.length < expect) {
-      console.log(`[net] waiting for players (${m.roster.length}/${expect})…`);
-      return;
-    }
-    started = true;
+    if (gameContext.roundStarted) return; // the roster is frozen once we're playing
+    lobby?.setRoster(values.room, m.roster, gameContext.clientId);
+  });
+
+  net.on('started', (m) => {
+    if (gameContext.roundStarted) return;
+    gameContext.roundStarted = true;
     // Replace our local player list with the full server roster (namespaced ids).
     gameContext.setupData!.players = m.roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs }));
-    gameContext.localPlayerIds = m.roster.filter((p) => p.ownerId === gameContext.clientId).map((p) => p.id);
+    gameContext.localPlayerIds = m.roster
+      .filter((p) => p.ownerId === gameContext.clientId)
+      .map((p) => p.id);
     console.log('[net] starting — this client owns', gameContext.localPlayerIds);
+    lobby?.setPlaying(values.room, m.roster.length);
     preLoad();
   });
 
   net.connect();
+}
+
+/**
+ * Leave the room. From the lobby that's instant (drop the socket, show the form
+ * again). Mid-round there's a loaded course, a physics world and a CourseGame
+ * built around a frozen roster, so we take the honest way out and reload back
+ * into the lobby.
+ */
+function leaveRoom() {
+  // drop our handlers first so the resulting 'close' isn't reported as an error
+  gameContext.net?.removeAllListeners();
+  gameContext.net?.leave();
+  if (gameContext.roundStarted) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('room'); // don't auto-rejoin what we just left
+    url.searchParams.set('mp', '1');
+    window.location.href = url.toString();
+    return;
+  }
+  gameContext.net = undefined;
+  gameContext.clientId = undefined;
+  gameContext.lobby?.open();
+  gameContext.lobby?.setStatus('Left the room.');
 }
 
 // listen for setup event from OpenGolfSim app

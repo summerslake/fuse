@@ -1,7 +1,11 @@
 /**
- * A single multiplayer room: the authoritative roster and turn state for one
- * game. Holds the connected clients' sockets so it can broadcast. No protocol
- * parsing or auth here — relay.js does that and calls into this.
+ * A single multiplayer room: the authoritative roster for one game. Holds the
+ * connected clients' sockets so it can broadcast. No protocol parsing or auth
+ * here — relay.js does that and calls into this.
+ *
+ * The room deliberately knows nothing about turns or scoring: turn order is
+ * derived identically on every client from the shot results themselves (see
+ * CourseGame's "away" model), so there is nothing here to arbitrate.
  */
 export class Room {
   /**
@@ -13,12 +17,10 @@ export class Room {
     this.courseUrl = courseUrl;
     /** @type {Map<string, { socket: any, playerIds: string[], alive: boolean }>} */
     this.clients = new Map();
-    /** roster order === turn order. Each entry is a Player + ownerId, id namespaced. */
+    /** roster order === honors order off the tee. Player + ownerId, id namespaced. */
     this.roster = [];
-    this.currentPlayerIndex = 0;
-    this.currentHoleNumber = 1;
-    /** set of `${playerId}@${holeNumber}` for players who have finished a hole */
-    this.finished = new Set();
+    /** true once someone has hit Start; late joiners are turned away */
+    this.started = false;
   }
 
   /**
@@ -44,10 +46,6 @@ export class Room {
   removeClient(clientId) {
     this.clients.delete(clientId);
     this.roster = this.roster.filter((p) => p.ownerId !== clientId);
-    // keep the turn index in range after someone leaves
-    if (this.currentPlayerIndex >= this.roster.length) {
-      this.currentPlayerIndex = 0;
-    }
   }
 
   ownsPlayer(clientId, playerId) {
@@ -55,61 +53,12 @@ export class Room {
     return !!c && c.playerIds.includes(playerId);
   }
 
-  hasFinishedHole(playerId, holeNumber) {
-    return this.finished.has(`${playerId}@${holeNumber}`);
-  }
-
-  markHoleComplete(playerId, holeNumber) {
-    this.finished.add(`${playerId}@${holeNumber}`);
-  }
-
-  allFinishedHole(holeNumber) {
-    return (
-      this.roster.length > 0 &&
-      this.roster.every((p) => this.hasFinishedHole(p.id, holeNumber))
-    );
-  }
-
-  /**
-   * Advance to the next player who hasn't finished the current hole. Port of
-   * CourseGame's #findNextPlayerUp / _nextPlayer (game.ts). When everyone has
-   * finished the hole, move to the next hole and back to the first player.
-   *
-   * NOTE (Phase 1): next-hole is a simple increment. Real hole sequencing
-   * (non-contiguous numbers, round-end) is refined in Phase 3 when the server
-   * is wired to CourseGame's ordered hole list.
-   *
-   * @returns {{ playerId: string|null, holeNumber: string }}
-   */
-  advanceTurn() {
-    const n = this.roster.length;
-    const hole = String(this.currentHoleNumber);
-    if (n === 0) return { playerId: null, holeNumber: hole };
-
-    for (let i = 1; i <= n; i++) {
-      const idx = (this.currentPlayerIndex + i) % n;
-      if (!this.hasFinishedHole(this.roster[idx].id, hole)) {
-        this.currentPlayerIndex = idx;
-        return { playerId: this.roster[idx].id, holeNumber: hole };
-      }
-    }
-
-    // everyone finished this hole -> next hole, first player
-    this.currentHoleNumber += 1;
-    this.currentPlayerIndex = 0;
-    return {
-      playerId: this.roster[0].id,
-      holeNumber: String(this.currentHoleNumber),
-    };
-  }
-
   snapshot() {
     return {
       code: this.code,
       courseUrl: this.courseUrl,
       roster: this.roster,
-      currentPlayerIndex: this.currentPlayerIndex,
-      currentHoleNumber: this.currentHoleNumber,
+      started: this.started,
     };
   }
 
@@ -117,8 +66,7 @@ export class Room {
     return {
       type: 'roster',
       roster: this.roster,
-      currentPlayerIndex: this.currentPlayerIndex,
-      currentHoleNumber: this.currentHoleNumber,
+      started: this.started,
     };
   }
 

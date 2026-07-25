@@ -488,3 +488,164 @@
   width: 5vh;
 }
 
+
+/* ---- multiplayer lobby ---- */
+
+.lobby {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 100000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg-color-solid);
+}
+.lobbyOpen {
+  display: flex;
+}
+.lobbyCard {
+  width: min(420px, 80vw);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--base-padding) * 1.5);
+  padding: calc(var(--base-padding) * 2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--bg-color);
+}
+.lobbyTitle {
+  font-size: var(--large-font-size);
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.lobbyField {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--base-padding) / 2);
+}
+.lobbyLabel {
+  font-size: var(--small-font-size);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+.lobbyInput {
+  font-family: var(--font-family);
+  font-size: var(--medium-font-size);
+  color: var(--text-color);
+  background-color: var(--active-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: var(--base-padding);
+  outline: none;
+}
+.lobbyInput:focus {
+  border-color: var(--primary-color);
+}
+.lobbyRow {
+  display: flex;
+  flex-direction: row;
+  gap: var(--base-padding);
+}
+.lobbyRow > * {
+  flex: 1;
+}
+.lobbyButton {
+  font-family: var(--font-family);
+  font-size: var(--medium-font-size);
+  font-weight: 800;
+  color: var(--text-color);
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: var(--base-padding);
+  cursor: pointer;
+}
+.lobbyButton:hover {
+  background-color: var(--hover-bg-color);
+}
+.lobbyButton:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+  opacity: 0.5;
+}
+.lobbyButtonPrimary {
+  background-color: var(--primary-color);
+  border-color: var(--primary-color);
+  color: var(--bg-color-solid);
+}
+.lobbyButtonPrimary:hover {
+  filter: brightness(1.1);
+  background-color: var(--primary-color);
+}
+.lobbyPlayers {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+.lobbyPlayer {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--base-padding);
+  padding: var(--base-padding);
+  font-size: var(--base-font-size);
+  border-bottom: 1px solid var(--border-color);
+}
+.lobbyPlayer:last-child {
+  border-bottom: none;
+}
+.lobbyPlayerTag {
+  margin-left: auto;
+  font-size: var(--small-font-size);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--primary-color);
+}
+.lobbyStatus {
+  font-size: var(--small-font-size);
+  color: var(--text-disabled);
+  min-height: var(--medium-font-size);
+}
+.lobbyStatusError {
+  color: #ff6b6b;
+}
+.lobbyPill {
+  /* top-center, just under the range finder — the corners are all taken */
+  position: fixed;
+  top: calc(var(--grid-size) * 5.5);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: none;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--base-padding);
+  padding: calc(var(--base-padding) / 2) var(--base-padding);
+  border-radius: var(--border-radius);
+  background-color: var(--bg-color);
+  font-size: var(--small-font-size);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+.lobbyPillOpen {
+  display: flex;
+}
+.lobbyPillLeave {
+  color: var(--text-color);
+  cursor: pointer;
+  user-select: none;
+}
+.lobbyPillLeave:hover {
+  color: var(--primary-color);
+}

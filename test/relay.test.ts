@@ -112,14 +112,27 @@ describe('relay ↔ NetClient', () => {
     expect(c2GotLaunch).toBe(false);
   });
 
-  it('advances the turn on hole_complete', async () => {
+  it('start closes the lobby for everyone with the final roster', async () => {
     const port = await startRelay();
     const { c1, c2, id1, id2 } = await joinTwo(port);
-    const onTurn = once(c2, 'turn');
-    c1.sendHoleComplete(id1, '1', 3); // id1 done with hole 1 -> id2 is up
-    const turn = await onTurn;
-    expect(turn.holeNumber).toBe('1');
-    expect(turn.playerId).toBe(id2);
+    const s1 = once(c1, 'started');
+    const s2 = once(c2, 'started');
+    c2.sendStart(); // anyone in the room may start
+    const [m1, m2] = await Promise.all([s1, s2]);
+    expect(m1.roster.map((p: any) => p.id).sort()).toEqual([id1, id2].sort());
+    expect(m2.roster).toEqual(m1.roster);
+  });
+
+  it('turns away a client that joins after the round has started', async () => {
+    const port = await startRelay();
+    const { c1 } = await joinTwo(port);
+    const started = once(c1, 'started');
+    c1.sendStart();
+    await started;
+    const late = makeClient(port, { roomCode: 'garage', courseUrl: 'course.glb', players: playersFor('C') });
+    const err = once(late, 'error');
+    late.connect();
+    expect(await err).toMatch(/already started/i);
   });
 
   it('drops a shot_result for a player the sender does not own', async () => {

@@ -3,6 +3,7 @@ export * from '@/ui/UIDialog';
 export * from '@/ui/UIMainMenu';
 export * from '@/ui/UIPlayerMenu';
 export * from '@/ui/UILoadingScreen';
+export * from '@/ui/UILobby';
 export * from '@/ui/UIRangeFinder';
 export * from '@/ui/UIScorecard';
 export * from '@/ui/UIShotData';

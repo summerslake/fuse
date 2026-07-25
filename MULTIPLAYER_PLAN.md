@@ -1,6 +1,28 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅ **Lobby (join/leave) + dead turn machinery deleted** (2026-07-25,
+  browser-verified). `UILobby` (`src/ui/UILobby.ts`) is the multiplayer front
+  door: name(s), room code, relay address, optional secret → live roster → any
+  player hits **Start round** → everyone builds the game from the same frozen
+  roster. Replaces the old `?expect=N` player-count guess. Once play begins the
+  overlay collapses to a corner pill (`ROOM x · N PLAYERS · LEAVE`) so there is
+  always a way out. Leaving from the lobby is instant; leaving mid-round reloads
+  back into the lobby (a loaded course + physics world + roster-bound CourseGame
+  can't be unwound safely). Names are comma separated for the garage case
+  ("Lake, Sarah" seats two local players on one machine). Last name/room/server
+  are remembered in localStorage; `?room=<code>` still auto-joins for quick
+  two-tab testing, `?mp=1` opens the lobby empty.
+  - **Protocol v3.** Added `start` (client→server) / `started` (server→client);
+    joining a room that has already started is rejected. Deleted the dormant
+    turn machinery: `hole_complete`/`turn` messages, `Room.advanceTurn`/
+    `finished`/`markHoleComplete`/`allFinishedHole`, `currentPlayerIndex` +
+    `currentHoleNumber` on the roster/snapshot, `NetClient.sendHoleComplete`,
+    and `CourseGame.setTurn`. `NetClient` also stops reconnecting after a server
+    error (they're all fatal join errors — retrying just loops).
+  - 32 vitest tests pass. Browser-verified (two tabs): join, live roster, leave
+    from the lobby, rejoin, Start, a synced shot with the turn passing to the
+    away player, leave mid-round, and the "already started" rejection.
 - ✅ **Shot-by-shot "away" turn model + live shots** (2026-07-25,
   browser-verified). Two big changes on top of Phase 3:
   1. **Turn model.** Play is now shot-by-shot: after every shot the turn passes
@@ -41,12 +63,15 @@
 - **Next: Phase 5** robustness (disconnect/rejoin, live roster changes, pre-load
   race). Plus polish ideas surfaced during play — see "Backlog" below.
 
-**Verify Phase 3 in a browser (the one thing tests can't cover):** two tabs on
-`courses/index.html?courseUrl=<glb>&room=garage&name=Lake` and `...&name=Brett`
-(with `npm run dev` running, which hosts the relay). Fire keyboard shots on the
-active tab; the other should stay locked out and its scorecard should track. Ghost
-balls come in Phase 4, so remote shots currently update the scorecard with no ball
-flight.
+**Verify in a browser (the one thing tests can't cover):** with `npm run dev`
+running (it hosts the relay), open two tabs on
+`courses/index.html?courseUrl=<glb>&room=<fresh-code>&name=Lake` and
+`...&name=Brett` — both land in the lobby and auto-join. Hit **Start round** on
+either, then fire keyboard shots (1-9 / space) on the active tab: the other tab
+should fly the same shot live, the turn should pass to whoever is farthest from
+the pin, and off-turn input should be ignored. The `LEAVE` pill under the range
+finder drops you back to the lobby. Use a *fresh* room code each run (see the HMR
+gotcha below).
 
 **Dev testing gotcha (not a production bug):** with `npm run dev`, the first page
 load can trigger a vite dependency re-optimization that HMR-reloads *all* open
@@ -83,14 +108,15 @@ real round on the Square. Everything below is toward that.
    port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
    end-to-end. (The in-process vite relay is dev-only.)
 3. **Phase 5 — robustness.** Disconnect/rejoin so the roster survives a client
-   dropping mid-round; handle live roster changes after start (currently ignored
-   — a late joiner/leaver isn't reflected); pre-load race (a shot that arrives
+   dropping mid-round — note the lobby now *rejects* a join to a started room, so
+   a network blip currently ends that client's round (needs a stable client key
+   the room can match a returning player against); live roster changes after
+   start are still ignored (mid-round the other clients keep playing the frozen
+   roster, including the leaver's players); pre-load race (a shot that arrives
    before a client finishes loading the GLB can be missed — GameSync is created
-   after load); a "waiting for Brett…" UI state.
-4. **Tidy-up.** The server's turn machinery (`hole_complete`/`turn`,
-   `Room.advanceTurn`, `currentPlayerIndex`, `finished`) is now dead — turn order
-   is client-side and deterministic. Safe to delete when convenient (its tests
-   too). `setTurn` in `CourseGame` is likewise unused now.
+   after load); an in-game "waiting for Brett…" indicator.
+4. ✅ ~~**Tidy-up** of the dead server turn machinery~~ — done 2026-07-25 with
+   the lobby work (protocol v3).
 5. **Play-feel polish (surfaced while testing).** The ~3s post-shot settle before
    the next player is noticeable; the gimme/auto-putt "you're done the instant you
    touch the green" (even from ~20m) can feel abrupt — worth revisiting the
@@ -284,11 +310,14 @@ and points at the host's address.
   code: 'garage',
   courseUrl: '<glb url>',        // first client to join sets it; others must match
   clients: Map<clientId, { socket, playerIds: string[], alive: bool }>,
-  roster: [{ ...OpenGolfSim.Player, ownerId: clientId }],   // ordered = turn order
-  currentPlayerIndex: 0,
-  currentHoleNumber: 1,
+  roster: [{ ...OpenGolfSim.Player, ownerId: clientId }],   // ordered = honors off the tee
+  started: false,               // true once someone hits Start; late joins rejected
 }
 ```
+
+> **Updated (v3):** the room holds no turn or hole state at all. Turn order is
+> derived identically on every client from the shot results (the "away" model),
+> so there is nothing for the server to arbitrate.
 
 > **Player IDs must be namespaced on join.** In *dev*, `generateSetupData`
 > (`src/utils/data.ts:34`) emits `player-1`, `player-2` — two dev clients both
@@ -308,18 +337,20 @@ Client → server:
 | type | payload | meaning |
 |---|---|---|
 | `join` | `{ protocolVersion, roomCode, roomSecret, courseUrl, players: Player[] }` | claim ownership of these players |
-| `shot_result` | `{ playerId, result: ShotResultPayload }` | my player finished a shot |
-| `hole_complete` | `{ playerId, holeNumber, strokes }` | my player finished a hole |
+| `shot_result` | `{ playerId, result: NetShotResult }` | my player finished a shot |
+| `shot_launch` | `{ playerId, launch: NetShotLaunch }` | my player just swung — fly it live |
+| `start` | `{}` | close the lobby, start the round for everyone |
 | `leave` | `{}` | graceful exit |
 
 Server → client:
 | type | payload | meaning |
 |---|---|---|
 | `joined` | `{ clientId, room: RoomSnapshot }` | ack + full state |
-| `roster` | `{ roster, currentPlayerIndex, currentHoleNumber }` | someone joined/left |
+| `roster` | `{ roster, started }` | someone joined/left |
 | `shot` | `{ playerId, result }` | rebroadcast (sent to everyone incl. origin) |
-| `turn` | `{ playerId, holeNumber }` | authoritative turn advance |
-| `error` | `{ message }` | bad join, courseUrl mismatch, version mismatch |
+| `launch` | `{ playerId, launch }` | rebroadcast — re-simulate this shot now |
+| `started` | `{ roster }` | lobby closed; build the game from this frozen roster |
+| `error` | `{ message }` | bad join, courseUrl mismatch, version mismatch, room started |
 
 `protocolVersion` is a hardcoded integer, bumped by hand whenever the message
 shapes change. Two people running different commits is the expected failure mode
@@ -337,7 +368,7 @@ Related server hygiene, since it will get portscanned:
 
 - Wrap all `JSON.parse` / message handling in try-catch; never crash on garbage
 - Ignore messages from a socket that has not completed `join`
-- Reject `shot_result` / `hole_complete` for a `playerId` the sending client does
+- Reject `shot_result` / `shot_launch` for a `playerId` the sending client does
   not own (also prevents honest bugs, not just abuse)
 - Cap message size and room size
 
@@ -428,6 +459,10 @@ Add a way to set the active player/hole from outside without re-running local
 scoring — `setTurn(playerId, holeNumber)` — for the server's `turn` message to
 call in Phase 3. `_nextPlayer()` stays for local play.
 
+> **Superseded.** `setTurn` was built, then deleted in the v3 tidy-up: with the
+> shot-by-shot "away" model every client derives the same turn from the shot
+> results, so there is no external turn to apply.
+
 ### 2d. Verification for Phase 2
 
 ```bash
@@ -450,7 +485,8 @@ build if unsure.** This is the safety gate for everything after it.
 
 **Phase 3 — Wire the loop.** `NetClient` + `CourseGame` meet in
 `examples/courses/courses.ts`. Local `shotEnded` → `shot_result` to server →
-`shot` broadcast → `applyShotResult()` on every client → `turn` → `setTurn()`.
+`shot` broadcast → `applyShotResult()` on every client (which advances the turn
+itself — the `turn`/`setTurn` step in this sketch was later dropped).
 Roster comes from the server instead of `setupData.players`. Playable round
 across two tabs, shared scorecard. (Ghost balls added in Phase 4.)
 
