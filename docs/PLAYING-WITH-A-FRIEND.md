@@ -12,6 +12,9 @@ code by construction and can never drift out of protocol sync.
 
 ## Host setup
 
+> Full host runbook, including LAN rehearsal and troubleshooting:
+> [HOSTING.md](./HOSTING.md). The short version follows.
+
 ### 1. Forward two ports
 
 Both TCP, to the host machine:
