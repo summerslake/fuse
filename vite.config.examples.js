@@ -82,6 +82,14 @@ function desktopCompat(server) {
   server.middlewares.use((req, res, next) => {
     if (!req.url) return next();
 
+    // Log what the host app actually asks for. Different OpenGolfSim versions
+    // call different endpoints, and "the Multiplayer tile didn't appear" is
+    // otherwise indistinguishable between "it never reached us", "it asked a
+    // library endpoint we don't inject into", and "it ignored our entry".
+    if (req.url.startsWith('/api/')) {
+      console.log(`    [api] ${req.method} ${req.url.split('?')[0]}`);
+    }
+
     // Add our tile to the library on its way through. Everything else under
     // /api is proxied untouched.
     if (req.url.startsWith('/api/courses/home')) {
