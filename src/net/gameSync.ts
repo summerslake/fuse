@@ -37,6 +37,7 @@ export class GameSync {
         endPosition: golfBall.object.position.toArray() as [number, number, number],
         surface: details.surface ? { type: details.surface.type } : undefined,
         isHoled: details.isHoled,
+        trail: downsampleTrail(golfBall.getTrailPoints?.()),
       };
       net.sendShotResult(game.activePlayer.id, payload);
     });
@@ -69,4 +70,28 @@ export class GameSync {
       this.#net.sendHoleComplete(playerId, holeNumber, strokes);
     }
   }
+}
+
+/** Max trail points to put on the wire — plenty for a smooth ghost, well under
+ *  the relay's 64KB payload cap even for a long, rolling drive. */
+const MAX_TRAIL_POINTS = 240;
+
+/**
+ * Even-stride downsample of a flight path for the wire. Always keeps the first
+ * and last point (tee-off and rest). Returns undefined when there's nothing
+ * worth replaying, so the field is simply omitted from the payload.
+ */
+function downsampleTrail(
+  points: number[][] | undefined,
+): [number, number, number][] | undefined {
+  if (!points || points.length < 2) return undefined;
+  const src = points as [number, number, number][];
+  if (src.length <= MAX_TRAIL_POINTS) return src;
+
+  const out: [number, number, number][] = [];
+  const stride = (src.length - 1) / (MAX_TRAIL_POINTS - 1);
+  for (let i = 0; i < MAX_TRAIL_POINTS; i++) {
+    out.push(src[Math.round(i * stride)]);
+  }
+  return out;
 }

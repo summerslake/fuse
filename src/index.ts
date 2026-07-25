@@ -14,6 +14,7 @@ export * from '@/audio';
 export * from '@/objects/aimPoint';
 export * from '@/objects/ballTrail';
 export * from '@/objects/flagStick';
+export * from '@/objects/ghostBall';
 export * from '@/objects/golfBall';
 
 // Shaders

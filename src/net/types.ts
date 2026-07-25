@@ -26,7 +26,7 @@ export interface RoomSnapshot {
 
 /**
  * Payload of a completed shot sent across the wire — enough to score it on every
- * client. Phase 4 (ghost balls) will add the sample arrays for replay.
+ * client AND replay it as a ghost ball (Phase 4).
  */
 export interface NetShotResult {
   /** ball resting position [x, y, z] */
@@ -34,6 +34,12 @@ export interface NetShotResult {
   /** surface the ball came to rest on; only `type` is needed for scoring */
   surface?: { type?: string };
   isHoled: boolean;
+  /**
+   * World-space flight path [x, y, z][] for ghost-ball replay on other clients.
+   * Optional: scoring never needs it, and a client that omits it still works.
+   * Downsampled to keep the message well under the relay's payload cap.
+   */
+  trail?: [number, number, number][];
 }
 
 // ---- client -> server ----

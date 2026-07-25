@@ -162,6 +162,30 @@ describe('GameSync — two clients play a synced round', () => {
     expect(scores(a.game)).toEqual(scores(b.game));
   });
 
+  it('forwards a downsampled ghost-ball trail to the other client, endpoints intact', async () => {
+    relay = createRelay({ port: 0 });
+    await relay.ready;
+    const port = relay.wss.address().port as number;
+    const { a, b } = await setupSession(port);
+
+    // A's ball reports a long flight path; GameSync should downsample it (cap
+    // 240) but always keep the first and last point.
+    const N = 1000;
+    const path: [number, number, number][] = [];
+    for (let i = 0; i < N; i++) path.push([i, Math.sin(i / 50) * 30, i * 0.5]);
+    a.ball.getTrailPoints = () => path.map((p) => [...p]);
+
+    const gotB = once(b.net, 'shot');
+    a.ball.object.position.fromArray(path[N - 1]);
+    a.ball.emit('shotEnded', { surface: { type: 'fairway' }, isHoled: false });
+    const shot = await gotB;
+
+    expect(shot.result.trail.length).toBeGreaterThan(1);
+    expect(shot.result.trail.length).toBeLessThanOrEqual(240);
+    expect(shot.result.trail[0]).toEqual(path[0]);
+    expect(shot.result.trail.at(-1)).toEqual(path[N - 1]);
+  });
+
   it('a shot for a player the sender does not own never reaches the other client', async () => {
     relay = createRelay({ port: 0 });
     await relay.ready;

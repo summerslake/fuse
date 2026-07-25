@@ -1,6 +1,17 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅ **Phase 4 done** (2026-07-24) — ghost balls. Remote shots now replay their
+  flight. `NetShotResult` carries an optional downsampled world-space `trail`
+  (`src/net/types.ts`); `GameSync` attaches `golfBall.getTrailPoints()` on send
+  (capped at 240 pts, endpoints preserved). New `GhostBall`
+  (`src/objects/ghostBall.ts`) — a blue sphere + `BallTrail` that flies the path
+  at constant velocity, then lingers ~2.5s and clears. `courses.ts` creates one
+  ghost and, on a `shot` for a *non-local* player, calls `ghost.play(trail)`
+  (own shots use the real ball). Trail forwarding is verified end-to-end through
+  the relay (34 tests). `GhostBall` itself can't be unit-tested headlessly (its
+  `BallTrail` needs WebGPU) — **not yet browser-verified.** No server change:
+  the relay already forwards `result` verbatim.
 - ✅ **Phase 3 done + browser-verified** (2026-07-23) — `GameSync`
   (`src/net/gameSync.ts`) wires `NetClient` ↔ `CourseGame`; `courses.ts` builds
   the game from the server roster and locks input off-turn. Commits `ffdf728`,
@@ -12,8 +23,8 @@
 - ✅ **Phase 2 done** — `CourseGame` refactor + ownership.
 - ✅ **Phase 1 done** — relay server + `NetClient` + in-process relay.
 - Desktop empirical spike (needs the app + a Square) still pending; not a blocker.
-- **Next: Phase 4** — ghost balls for remote shots (replay sample arrays via
-  `BallTrail`; populate the unused `ballTrail` field). Then Phase 5 robustness.
+- **Next: browser-verify Phase 4** (two tabs, watch a remote shot fly), then
+  **Phase 5** robustness (disconnect/rejoin, live roster, pre-load race).
 
 **Verify Phase 3 in a browser (the one thing tests can't cover):** two tabs on
 `courses/index.html?courseUrl=<glb>&room=garage&name=Lake` and `...&name=Brett`
@@ -395,14 +406,18 @@ build if unsure.** This is the safety gate for everything after it.
 `examples/courses/courses.ts`. Local `shotEnded` → `shot_result` to server →
 `shot` broadcast → `applyShotResult()` on every client → `turn` → `setTurn()`.
 Roster comes from the server instead of `setupData.players`. Playable round
-across two tabs, shared scorecard, no ghost balls yet.
+across two tabs, shared scorecard. (Ghost balls added in Phase 4.)
 
-**Phase 4 — Ghost balls.** On `shot` for a non-local player, spawn a lightweight
-sphere + `BallTrail` and animate along `heightSamples`/`lateralSamples`/
-`distanceSamples`. Consider finally populating the unused `ballTrail` field
-(`globals.d.ts:99`) with world-space points — simpler than reconstructing from
-the three sample arrays, at the cost of a bigger payload. Leave a marker at
-`endPosition`.
+**Phase 4 — Ghost balls. ✅ DONE (2026-07-24).** Chose to send the ball's own
+world-space trail (`golfBall.getTrailPoints()`) rather than reconstruct from the
+three sample arrays — no math, and it matches the real ball's path exactly. The
+trail rides inside `NetShotResult.trail` (optional, downsampled to ≤240 pts,
+endpoints preserved) so scoring-only messages stay valid and no server change is
+needed. `GhostBall` (`src/objects/ghostBall.ts`) owns a sphere + `BallTrail` and
+flies the path at constant velocity via `update(delta)` from the render loop,
+then lingers ~2.5s and clears. `courses.ts` plays it only for non-local players
+(own shots already show the real ball). Skipped the `ballTrail` globals field —
+unnecessary. Still needs a two-tab browser check to watch a shot actually fly.
 
 **Phase 5 — Robustness.** Disconnect/rejoin (roster must survive a client
 dropping mid-round), "waiting for Brett…" UI state, input lockout when

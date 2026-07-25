@@ -10,6 +10,7 @@ import {
   CourseGame,
   CourseKeyboardControls,
   GolfBall,
+  GhostBall,
   ShotPerspectiveCamera,
   UICourseMap,
   UIShotData,
@@ -44,6 +45,7 @@ const gameContext: {
   scene?: THREE.Scene;
   renderer?: FuseRenderer,
   golfBall?: GolfBall,
+  ghostBall?: GhostBall,
   lightGroup?: CourseLight,
   fog?: THREE.Fog,  
   clouds?: VolumetricClouds,
@@ -421,6 +423,17 @@ async function setupCourse() {
   // the echo (CourseGame's built-in ball adapter is off when networked).
   if (gameContext.net) {
     gameContext.gameSync = new GameSync(gameContext.game, gameContext.net, gameContext.golfBall);
+
+    // Phase 4 — ghost balls. A remote player's shot never runs local physics,
+    // so replay its flight path as a separate ghost. Our own shots use the real
+    // ball, so skip those (localPlayerIds owns them).
+    gameContext.ghostBall = new GhostBall(gameContext.scene);
+    gameContext.net.on('shot', ({ playerId, result }) => {
+      if (!gameContext.game || gameContext.game.localPlayerIds.has(playerId)) return;
+      if (result.trail && result.trail.length >= 2) {
+        gameContext.ghostBall?.play(result.trail);
+      }
+    });
   }
   gameContext.game?.on('nextShot', (player) => {
     console.log(`A new player (${player.name}) is up!`);
@@ -522,6 +535,9 @@ function animate(animDelta: number) {
   if (gameContext.golfBall) {
     gameContext.golfBall.update(delta);
   }
+
+  // Replay a remote player's shot as a ghost (multiplayer only).
+  gameContext.ghostBall?.update(delta);
 
   gameContext.renderer?.clear();
 
