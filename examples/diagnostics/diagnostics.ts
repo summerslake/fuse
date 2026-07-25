@@ -77,16 +77,23 @@ row(env, 'User agent', navigator.userAgent);
 // Rapier compiles WASM, which a CSP without 'wasm-unsafe-eval' will block. The
 // AppBridge only signals success, so time it out rather than sit on "initializing".
 const rapierRow = row(env, 'Rapier physics (WASM)', 'initializing…', 'pending');
+const rapierStarted = performance.now();
 let rapierReady = false;
 app.initialize(() => {
   rapierReady = true;
-  setRow(rapierRow, 'initialized', 'pass');
+  setRow(rapierRow, `initialized after ${((performance.now() - rapierStarted) / 1000).toFixed(1)}s`, 'pass');
 });
-setTimeout(() => {
-  if (!rapierReady) {
-    setRow(rapierRow, 'still not initialized after 10s — WASM compile likely blocked (CSP wasm-unsafe-eval?)', 'fail');
+// Keep counting rather than declaring failure at a fixed moment — the question
+// is whether this is slow or genuinely stuck, and a static row can't say.
+const rapierTick = setInterval(() => {
+  if (rapierReady) return clearInterval(rapierTick);
+  const seconds = (performance.now() - rapierStarted) / 1000;
+  rapierRow.value.textContent = `still initializing… ${seconds.toFixed(0)}s`;
+  if (seconds > 30) {
+    setRow(rapierRow, `stuck — no resolution after ${seconds.toFixed(0)}s, and WASM compile itself is allowed`, 'fail');
+    clearInterval(rapierTick);
   }
-}, 10000);
+}, 1000);
 
 // `web` means no host app is talking to us — expected in a plain browser tab,
 // but under Desktop it would mean shots have no route in.
@@ -230,6 +237,18 @@ testRelay();
 
 const setup = el('setup');
 const setupRow = row(setup, 'setup event', 'waiting for the host app…', 'pending');
+
+/**
+ * AppBridge only sends `{type:'ready'}` from setReady(), which runs *after*
+ * Rapier initializes — so a stuck Rapier means the host app never hears that the
+ * page is up, and (the suspicion) never arms the launch monitor. This button
+ * sends it by hand to test that link without waiting on physics.
+ */
+const readyRow = row(setup, 'ready signal to host', 'not sent — AppBridge only sends it once Rapier initializes');
+el('send-ready').addEventListener('click', () => {
+  app.sendMessage({ type: 'ready' });
+  setRow(readyRow, `sent by hand at ${new Date().toLocaleTimeString()} — does the launch monitor arm now?`, 'pass');
+});
 
 app.on('setup', (payload: any) => {
   setRow(setupRow, 'received', 'pass');
