@@ -127,6 +127,10 @@ export class AppBridge extends EventEmitter<EventMap> {
   setReady() {
     console.log('[runtime] Rapier initialized');
     this.isReady = true;
+    // Tell our own listeners first, then the host app. These are separate
+    // concerns: `initialize()` waits on this event, and it must fire whoever
+    // (if anyone) is hosting us — see the note in sendMessage.
+    this.emit('ready');
     this.sendMessage({ type: 'ready' });
   }
 
@@ -208,8 +212,6 @@ export class AppBridge extends EventEmitter<EventMap> {
     } else if (this.appType === 'webapp' && window.parent?.postMessage) {
       console.log('Sending to iframe: ', payload);
       window.parent.postMessage(payload, '*');
-    } else if (payload.type === 'ready') {
-      this.emit('ready');
     } else {
       console.warn('No parent to send message to!', payload);
       // TODO: use a cloud-based websocket here to sync for web play?

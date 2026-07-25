@@ -76,21 +76,30 @@ row(env, 'User agent', navigator.userAgent);
 
 // Rapier compiles WASM, which a CSP without 'wasm-unsafe-eval' will block. The
 // AppBridge only signals success, so time it out rather than sit on "initializing".
-const rapierRow = row(env, 'Rapier physics (WASM)', 'initializing…', 'pending');
+// Two separate things, and conflating them cost us a round trip: whether the
+// physics world actually exists, and whether `initialize()`'s callback fires.
+const worldRow = row(env, 'Physics world (app.world)', 'not created yet', 'pending');
+const worldTick = setInterval(() => {
+  if (!app.world) return;
+  setRow(worldRow, 'created — Rapier initialized fine', 'pass');
+  clearInterval(worldTick);
+}, 250);
+
+const rapierRow = row(env, 'app.initialize() callback', 'waiting…', 'pending');
 const rapierStarted = performance.now();
 let rapierReady = false;
 app.initialize(() => {
   rapierReady = true;
-  setRow(rapierRow, `initialized after ${((performance.now() - rapierStarted) / 1000).toFixed(1)}s`, 'pass');
+  setRow(rapierRow, `fired after ${((performance.now() - rapierStarted) / 1000).toFixed(1)}s`, 'pass');
 });
 // Keep counting rather than declaring failure at a fixed moment — the question
 // is whether this is slow or genuinely stuck, and a static row can't say.
 const rapierTick = setInterval(() => {
   if (rapierReady) return clearInterval(rapierTick);
   const seconds = (performance.now() - rapierStarted) / 1000;
-  rapierRow.value.textContent = `still initializing… ${seconds.toFixed(0)}s`;
+  rapierRow.value.textContent = `still waiting… ${seconds.toFixed(0)}s`;
   if (seconds > 30) {
-    setRow(rapierRow, `stuck — no resolution after ${seconds.toFixed(0)}s, and WASM compile itself is allowed`, 'fail');
+    setRow(rapierRow, `never fired after ${seconds.toFixed(0)}s${app.world ? ' — but the physics world exists, so this is the ready event, not Rapier' : ''}`, 'fail');
     clearInterval(rapierTick);
   }
 }, 1000);
