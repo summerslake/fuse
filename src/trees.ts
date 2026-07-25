@@ -200,15 +200,12 @@ export class TreePlanter {
   }
 
   #makeBatchMaterial(source: THREE.Material, isBillboardOnly: boolean): THREE.Material {
-    const src = source as THREE.MeshStandardMaterial;
-    const lowTier = this.qualityLevel === QualityMode.Low;
-
-    if (!lowTier) return source.clone();
-
-    // Standard = same PBR family as Physical, minus clearcoat/sheen/transmission cost
-    const cheap = new THREE.MeshStandardMaterial();
-    THREE.MeshStandardMaterial.prototype.copy.call(cheap, src);
-    return cheap;
+    // Low tier used to swap in a plain MeshStandardMaterial built with
+    // `MeshStandardMaterial.prototype.copy.call(...)`. Under WebGPU the source
+    // is a node material, and that copy doesn't carry node properties across —
+    // so the foliage cutout was lost and trees rendered as black squares.
+    // Clone the real material until there's a downgrade that survives TSL.
+    return source.clone();
 
     // // Low tier: unlit billboards, cheap-lit foliage/trunks
     // const cheap = isBillboardOnly

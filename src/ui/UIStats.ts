@@ -120,6 +120,8 @@ export class UIStats {
   msPanel: UIStatsPanel;
   fpsPanel: UIStatsPanel;
   drawCallsPanel: UIStatsPanel;
+  /** shows which graphics API is actually in use */
+  backend!: HTMLElement;
   renderer?: WebGLRenderer | WebGPURenderer;
   #beginTime = 0;
   #prevTime = 0;
@@ -143,7 +145,6 @@ export class UIStats {
     Object.assign(this.container.style, {
       position: 'fixed',
       width: '80px',
-      height: '48px',
       bottom: '10px',
       right: '10px',
       zIndex: '9999'
@@ -163,6 +164,39 @@ export class UIStats {
     this.drawCallsPanel = new UIStatsPanel( 'DRAWS', 'rgb(169, 115, 255)', 'rgb(34, 0, 50)' );
     this.container.append(this.drawCallsPanel.dom);
     this.showPanel(0);
+
+    // Which graphics API actually got used. WebGPURenderer silently falls back
+    // to a WebGL backend when WebGPU isn't available — notably on any origin
+    // that isn't a secure context, which is every remote player. Chasing that
+    // through a log file on someone else's machine is not a plan.
+    this.backend = document.createElement('div');
+    Object.assign(this.backend.style, {
+      font: 'bold 9px Helvetica,Arial,sans-serif',
+      color: '#21d48d',
+      background: '#111c1c',
+      padding: '2px 3px',
+      textAlign: 'center',
+    });
+    this.backend.textContent = 'API …';
+    this.container.append(this.backend);
+    this.#reportBackend();
+  }
+
+  /** WebGPU reports its backend asynchronously, so poll briefly for it. */
+  #reportBackend(attempt = 0) {
+    const renderer = this.renderer as any;
+    const backend = renderer?.backend;
+    if (!backend) {
+      this.backend.textContent = 'API WebGL';
+      return;
+    }
+    if (backend.isWebGPUBackend === undefined && attempt < 20) {
+      setTimeout(() => this.#reportBackend(attempt + 1), 250);
+      return;
+    }
+    const isWebGPU = !!backend.isWebGPUBackend;
+    this.backend.textContent = isWebGPU ? 'API WebGPU' : 'API WebGL';
+    this.backend.style.color = isWebGPU ? '#21d48d' : 'rgb(255, 202, 68)';
   }
   toggle() {
     const hidden = this.container.style.display === 'none';
@@ -203,7 +237,9 @@ export class UIStats {
   
   #handleClick(event: PointerEvent) {
     event.preventDefault();
-    this.showPanel( ++ this.mode % this.container.children.length );
+    // count the panels, not the container's children — the backend label is a
+    // child too, and cycling onto it would blank the graph
+    this.showPanel( ++ this.mode % 3 );
   }
   
 	showPanel(id: number) {

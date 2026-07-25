@@ -74,9 +74,10 @@ export class FuseRenderer {
     }
 
     this.renderer.setPixelRatio(pixelRatio);
-    // Shadow maps are one of the most expensive things here and were on at every
-    // quality level — so "Low" wasn't actually low on a weak GPU.
-    this.renderer.shadowMap.enabled = this.qualityLevel > QualityMode.Low;
+    // Shadows stay on at every level: turning them off at Low bought a lot of
+    // frames but the scene reads as flat and wrong. Antialiasing is the lever
+    // Low pulls instead (see the examples' renderer setup).
+    this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFShadowMap;
     
 
