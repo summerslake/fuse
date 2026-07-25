@@ -154,12 +154,14 @@ real round on the Square. Everything below is toward that.
    confirmed on real hardware: Desktop loads our build, `ws://` to the relay
    works from inside it, and real Square shots arrive as `app.on('shot')`. See
    the status entry at the top. **The new gating task is (1b).**
-1b. **Wire the lobby into the Desktop launch path.** Desktop launches
-   `courses/index.html` with no query string, so `initializeDebug()` never runs
-   and the lobby is unreachable — `app.on('setup')` goes straight to `preLoad()`
-   and a solo round. Also `joinRoom()` rebuilds players with
-   `generateSetupData()`, which would throw away the real 14-club bag Desktop
-   sends. Both must change before a real round with Brett.
+1b. ✅ ~~**Wire the lobby into the Desktop launch path.**~~ — done 2026-07-25.
+   Two ways in: a **Multiplayer tile injected into Desktop's library** (the dev
+   server owns the proxied `/api/courses/home`, so it hands Desktop one extra
+   entry pointing at `examples/multiplayer/`), which launches straight into the
+   lobby with a course picker; and a **Multiplayer button** on a normally
+   launched round, which stashes the room in sessionStorage and reloads. Players
+   and their real club distances now come from the host app's `setup` payload
+   instead of `generateSetupData()`.
 2. **Real-world connectivity.** For Lake↔Brett over the internet: run the
    standalone relay (`npm run server`, set `OGS_MP_SECRET`), port-forward its
    port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
@@ -174,6 +176,19 @@ real round on the Square. Everything below is toward that.
    after load); an in-game "waiting for Brett…" indicator.
 4. ✅ ~~**Tidy-up** of the dead server turn machinery~~ — done 2026-07-25 with
    the lobby work (protocol v3).
+4b. **Multiplayer on the practice range** (asked for 2026-07-25; parked until one
+   real internet round has happened). Not a picker entry — the lobby's course
+   list feeds `CourseGame`, which needs holes, tees and pins, and the range is a
+   separate example with none of that (`gameMode: 0`, no `courseUrl`, so the
+   filter skips it). It's a **different mode**: no turn order, no scorecard, no
+   hole advance — everyone hits whenever they like and simply sees each other's
+   balls fly.
+   The expensive half already exists and doesn't care about holes: `shot_launch`
+   → re-simulate is what makes remote shots fly. What `examples/range/` lacks is
+   a `NetClient` and a small sync that replays inbound shots with no turn gating
+   (`GameSync` is scoring-only and assumes `CourseGame`). Simpler than the course
+   mode, and it sets up **closest-to-the-pin**, which is mostly UI on top of
+   shared shots.
 5. **Play-feel polish (surfaced while testing).** The ~3s post-shot settle before
    the next player is noticeable; the gimme/auto-putt "you're done the instant you
    touch the green" (even from ~20m) can feel abrupt — worth revisiting the
