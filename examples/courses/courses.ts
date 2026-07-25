@@ -595,12 +595,28 @@ function animate(animDelta: number) {
   // gameContext.game?.update(delta);
 
   if (gameContext.scene && gameContext.game) {
+    const game = gameContext.game;
+    const ball = gameContext.golfBall;
+    // While a shot is in the air the map should track the ball itself, not the
+    // lie it was struck from. Between shots they're the same point.
+    const ballPosition = ball?.isShotActive && ball.object
+      ? ball.object.position
+      : gameContext.startPoint;
+
     gameContext.courseMap?.render(
       gameContext.scene,
-      gameContext.game.activeHole,
+      game.activeHole,
       {
-        ball: gameContext.startPoint,
+        ball: ballPosition,
         aim: gameContext.aimPoint,
+        // every ball still in play on this hole, so you can see where the group is
+        players: game.players
+          .filter((player) => !player.disabled)
+          .map((player) => ({
+            name: player.name,
+            position: player.start,
+            isActive: player.id === game.activePlayer.id,
+          })),
       }
     );
   }

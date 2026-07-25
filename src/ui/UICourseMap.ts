@@ -14,6 +14,14 @@ type UICourseMapOptions = {
   units?: OpenGolfSim.MeasurementUnits;
   holes?: CourseHoleMap;
 }
+/** A ball to plot on the map — one per player still playing the hole. */
+export type UICourseMapPlayer = {
+  name: string;
+  position: THREE.Vector3;
+  /** the player whose turn it is; drawn as the white ball, others in blue */
+  isActive?: boolean;
+}
+
 interface UICourseMapsEvents {
   updateAim: (position: THREE.Vector3) => void;
   updateStart: (position: THREE.Vector3) => void;
@@ -158,7 +166,11 @@ export class UICourseMap extends EventEmitter<UICourseMapsEvents> {
     }
   }
 
-  render(scene: THREE.Scene, currentHole: Hole, currentPositions: { ball?: THREE.Vector3, aim?: THREE.Vector3 } = {}) {
+  render(
+    scene: THREE.Scene,
+    currentHole: Hole,
+    currentPositions: { ball?: THREE.Vector3, aim?: THREE.Vector3, players?: UICourseMapPlayer[] } = {}
+  ) {
     this.#frameCount++;
     if (this.#frameCount % this.#renderInterval !== 0) return;
 
@@ -194,6 +206,14 @@ export class UICourseMap extends EventEmitter<UICourseMapsEvents> {
     const aimPosition = currentPositions.aim ?? currentHole?.waypoints?.get('aim');
     const pinPosition = currentHole?.waypoints?.get('pin');
 
+    // Everyone else's ball first, so the active ball always draws on top.
+    const players = currentPositions.players ?? [];
+    const named = players.length > 1;
+    for (const player of players) {
+      if (player.isActive) continue;
+      this.#drawPlayerBall(ctx, player.position, player.name, colors.blue);
+    }
+
     if (ballPosition) this.#drawDot(ctx, ballPosition, colors.white);
     if (aimPosition) {
       const aimDist = ballPosition ? aimPosition.distanceTo(ballPosition) : 0;
@@ -203,6 +223,58 @@ export class UICourseMap extends EventEmitter<UICourseMapsEvents> {
       const pinDist = ballPosition ? pinPosition.distanceTo(ballPosition) : 0;
       this.#drawDot(ctx, pinPosition, colors.red, pinDist);
     }
+
+    // Name the active ball too, but only when there's someone to tell it apart
+    // from. `ballPosition` is live during a shot, so the label flies with it.
+    const active = players.find((player) => player.isActive);
+    if (named && active && ballPosition) {
+      const xy = this._worldToMinimap(ballPosition);
+      this.#drawNameLabel(ctx, xy.x, xy.y, active.name, colors.white);
+    }
+  }
+
+  /**
+   * Another player's ball. Balls outside the current framing (someone still back
+   * on the tee while you're at the green) are pinned to the edge and dimmed, so
+   * you can always tell roughly where everyone is.
+   */
+  #drawPlayerBall(ctx: CanvasRenderingContext2D, position: THREE.Vector3, name: string, color: string) {
+    const xy = this._worldToMinimap(position);
+    const margin = window.innerHeight * 0.012;
+    const x = Math.min(Math.max(xy.x, margin), this.width - margin);
+    const y = Math.min(Math.max(xy.y, margin), this.height - margin);
+    const offMap = x !== xy.x || y !== xy.y;
+
+    ctx.save();
+    ctx.globalAlpha = offMap ? 0.5 : 1;
+    ctx.beginPath();
+    ctx.arc(x, y, window.innerHeight * 0.006, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    this.#drawNameLabel(ctx, x, y, name, color);
+    ctx.restore();
+  }
+
+  /** Small chip above a ball. Distance labels sit below, so they don't collide. */
+  #drawNameLabel(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string) {
+    const fontSize = window.innerHeight * 0.012;
+    const padding = fontSize;
+    const offsetY = window.innerHeight * 0.012;
+
+    ctx.font = `normal ${fontSize}px Rubik,Arial,Helvetica,sans-serif`;
+    const metrics = ctx.measureText(text);
+    const textWidth = Math.ceil(metrics.width + padding);
+    const textHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent + padding;
+
+    ctx.beginPath();
+    ctx.roundRect(x - textWidth / 2, y - offsetY - textHeight, textWidth, textHeight, 4);
+    ctx.fillStyle = colors.background;
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text, x, y - offsetY - padding / 2, textWidth);
   }
 
   #drawDot(ctx: CanvasRenderingContext2D, position: THREE.Vector3, color: string = '#e9c834', distanceMeters = 0) {
