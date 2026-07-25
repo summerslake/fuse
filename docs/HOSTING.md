@@ -68,6 +68,14 @@ lsof -nP -iTCP:8080 -sTCP:LISTEN
 
 ---
 
+### What still needs the internet
+
+The relay and the game build are entirely local — those work on an isolated LAN.
+But **OpenGolfSim sign-in, the course library, and downloading a course you
+haven't played before** all go to OpenGolfSim's servers *through your machine*.
+So a working internet connection on the host is required in practice, even when
+you and your guest are on the same wifi.
+
 ## 2. Find the address to give your guest
 
 **Same network (LAN)** — nothing to forward:
@@ -161,6 +169,8 @@ machine.
 | Your lobby says the relay is unreachable | The relay didn't start — check for something else on 8080. |
 | No Multiplayer tile in your library | You're on the hosted app. Quit OpenGolfSim fully and relaunch with the override. |
 | Guest gets "protocol version mismatch" | They aren't loading your build — their `OGS_APP_URL` didn't take. |
+| `http proxy error: ... certificate has expired` | Your host machine can't reach the internet. A dropped connection or a router intercepting TLS reports as an expired certificate — it's almost never a real cert problem. Check `curl -s -o /dev/null -w '%{http_code}' https://example.com` and your clock (`date`). |
+| Course list is empty in OpenGolfSim | Same cause. Sign-in, the library and first-time course downloads all go to OpenGolfSim's servers through your machine. The Multiplayer tile still appears, but a course you've never played can't download. |
 | A player drops mid-round | Handled: they reconnect automatically, reclaim their slot, and the relay replays the shots they missed. Their corner pill reads "reconnecting…" meanwhile. The room survives 5 minutes with nobody connected. |
 | A player **reloads** mid-round | Known gap. They rejoin the room but their scorecard restarts — only shots from the resume point onward are replayed. Restart the round. |
 | "that round has already started" | A genuinely new player can't join mid-round (returning players are fine). Use a fresh room code. |

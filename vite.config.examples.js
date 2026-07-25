@@ -18,6 +18,16 @@ const desktopProxy = {
   '^/api/': {
     target: 'https://app.opengolfsim.com',
     changeOrigin: true,
+    configure: (proxy) => {
+      // One readable line instead of a TLS stack trace per failed request —
+      // when the connection is down this fires several times a second.
+      proxy.on('error', (err, _req, res) => {
+        console.warn(`    ⚠  OpenGolfSim API unreachable: ${err.code || err.message}`);
+        if (typeof res?.writeHead !== 'function' || res.headersSent) return;
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end('{"error":"OpenGolfSim API unreachable from the host"}');
+      });
+    },
   },
 };
 
@@ -48,8 +58,20 @@ const MULTIPLAYER_TILE = {
 
 async function serveLibraryWithMultiplayer(req, res) {
   const upstream = new URL(req.url, 'https://app.opengolfsim.com');
-  const response = await fetch(upstream, { headers: { accept: 'application/json' } });
-  const body = await response.json();
+  let body = { courses: [] };
+  try {
+    const response = await fetch(upstream, { headers: { accept: 'application/json' } });
+    body = await response.json();
+  } catch (err) {
+    // No internet, or something intercepting TLS (a dropped connection often
+    // surfaces as "certificate has expired"). Still serve our own tile: the
+    // relay and the game build are local, so multiplayer shouldn't vanish just
+    // because OpenGolfSim's servers are unreachable.
+    console.warn(
+      `    ⚠  OpenGolfSim API unreachable (${err.cause?.code || err.message}) — serving the Multiplayer tile only.\n` +
+        '       Sign-in, the full library and first-time course downloads need internet.\n'
+    );
+  }
   body.courses = [MULTIPLAYER_TILE, ...(body.courses ?? [])];
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
