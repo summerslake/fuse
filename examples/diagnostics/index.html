@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>FUSE Diagnostics</title>
     <style>
-      body { overflow: auto; }
+      /* base.css (injected later, by the JS bundle) sets body{overflow:hidden}
+         for the game canvas — this page is a document and has to scroll. */
+      html, body {
+        overflow: auto !important;
+        height: auto !important;
+      }
       .diag {
         max-width: 820px;
         margin: 0 auto;

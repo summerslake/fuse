@@ -74,14 +74,38 @@ row(env, 'Page protocol', window.location.protocol, httpsPage ? 'warn' : 'pass')
 row(env, 'Secure context', String(window.isSecureContext));
 row(env, 'User agent', navigator.userAgent);
 
+// Rapier compiles WASM, which a CSP without 'wasm-unsafe-eval' will block. The
+// AppBridge only signals success, so time it out rather than sit on "initializing".
 const rapierRow = row(env, 'Rapier physics (WASM)', 'initializing…', 'pending');
-app.initialize(() => setRow(rapierRow, 'initialized', 'pass'));
+let rapierReady = false;
+app.initialize(() => {
+  rapierReady = true;
+  setRow(rapierRow, 'initialized', 'pass');
+});
+setTimeout(() => {
+  if (!rapierReady) {
+    setRow(rapierRow, 'still not initialized after 10s — WASM compile likely blocked (CSP wasm-unsafe-eval?)', 'fail');
+  }
+}, 10000);
 
 // `web` means no host app is talking to us — expected in a plain browser tab,
 // but under Desktop it would mean shots have no route in.
 if (app.appType === 'web') {
   row(env, 'Note', 'appType "web" — no host app detected. In a plain browser tab this is normal.');
 }
+// A CSP from the host app is the prime suspect when a socket or WASM compile
+// fails here — this reports the exact directive and the policy behind it, which
+// is the difference between "the relay is unreachable" and "we were forbidden".
+const cspRow = row(env, 'CSP violations', 'none so far');
+let policyShown = false;
+document.addEventListener('securitypolicyviolation', (event) => {
+  setRow(cspRow, `${event.effectiveDirective || event.violatedDirective} blocked ${event.blockedURI}`, 'fail');
+  if (!policyShown && event.originalPolicy) {
+    policyShown = true;
+    row(env, 'Active policy', event.originalPolicy);
+  }
+});
+
 // An https page has its ws:// blocked as mixed content — the relay would need TLS.
 if (httpsPage) {
   row(env, 'Note', 'This page is https, so the browser will block ws:// as mixed content. If the relay test fails, that is why — the relay needs TLS (wss://), or Desktop needs to load us over http.');
@@ -94,14 +118,32 @@ const hostInput = el('relay-host') as HTMLInputElement;
 hostInput.value = `${window.location.hostname || 'localhost'}:8080`;
 
 row(relay, 'Protocol version', String(PROTOCOL_VERSION));
+const reachRow = row(relay, 'Relay port over http', 'not tested yet', 'pending');
 const socketRow = row(relay, 'WebSocket opens', 'not tested yet', 'pending');
 const joinRow = row(relay, 'Relay join (full protocol)', 'not tested yet', 'pending');
 
 let client: NetClient | undefined;
 
+/**
+ * Plain HTTP to the relay port before the WebSocket. The ws server answers a
+ * bare GET with 400, so *any* response proves the port is reachable and that
+ * connect-src allows the origin — which separates "nothing is listening" from
+ * "the socket upgrade specifically was refused".
+ */
+async function testReachability(host: string) {
+  setRow(reachRow, `GET http://${host} …`, 'pending');
+  try {
+    const res = await fetch(`http://${host}/`, { mode: 'no-cors' });
+    setRow(reachRow, `answered (status ${res.status || 'opaque'}) — port reachable`, 'pass');
+  } catch (err) {
+    setRow(reachRow, `fetch failed: ${err} — port unreachable, or connect-src blocks it`, 'fail');
+  }
+}
+
 function testRelay() {
   const host = hostInput.value.trim();
   const url = `ws://${host}`;
+  void testReachability(host);
   setRow(socketRow, `connecting to ${url}…`, 'pending');
   setRow(joinRow, 'waiting on the socket…', 'pending');
 
@@ -134,11 +176,13 @@ function testRelay() {
 
   raw.addEventListener('error', () => {
     clearTimeout(timeout);
+    // Deliberately not guessing at the cause here — the CSP row above and the
+    // http reachability row together say which of these it actually is.
     setRow(
       socketRow,
-      window.isSecureContext
-        ? 'failed — likely blocked (secure context forbids ws://)'
-        : 'failed — relay not running, wrong host, or blocked',
+      httpsPage
+        ? 'failed — this is an https page, so ws:// is blocked as mixed content'
+        : 'failed — blocked by policy, or nothing listening (see the CSP and reachability rows)',
       'fail'
     );
     setRow(joinRow, 'skipped — no socket', 'fail');
