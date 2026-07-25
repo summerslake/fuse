@@ -131,6 +131,8 @@ function launchShot(shot: OpenGolfSim.Shot) {
 
     // this is a real local shot, so GameSync should report its result
     gameContext.replayingRemoteShot = false;
+    // covers keyboard test shots too, which never reach app.on('shot')
+    removeMultiplayerButton();
     gameContext.shotData?.updateShotData(shot);
     gameContext.golfBall.launchShot(shot);
 
@@ -384,10 +386,20 @@ function aimPointUpdated(forced = false) {
  * stashed in sessionStorage. That's safe because Desktop re-sends `setup`
  * immediately on reload (measured 2026-07-25: 0.0s into the new page load).
  */
+let setupHandled = false;
+
 async function handleSetup(payload: any) {
   console.log('Received setup event', payload);
   if (!payload?.setupData) throw new Error('No setupData received in setup event!');
   if (!payload?.gameData) throw new Error('No gameData received in setup event!');
+  // The host app may send `setup` more than once per page load. Loading the
+  // course twice would build a second scene, ball and CourseGame over the top
+  // of the first — take the first payload and ignore the rest.
+  if (setupHandled) {
+    console.warn('[setup] ignoring a repeat setup event — the round is already loading');
+    return;
+  }
+  setupHandled = true;
   gameContext.setupData = payload?.setupData as OpenGolfSim.SetupData;
   gameContext.gameData = payload?.gameData as OpenGolfSim.GameData;
   // the host app owns the player list here — real names, real club distances
@@ -404,19 +416,22 @@ async function handleSetup(payload: any) {
   addMultiplayerButton();
 }
 
+/** Remove every opt-in button, however many somehow got added. */
+function removeMultiplayerButton() {
+  document.querySelectorAll('.mp-opt-in').forEach((button) => button.remove());
+}
+
 /** Opt into multiplayer from a host-launched (solo) round. */
 function addMultiplayerButton() {
+  removeMultiplayerButton(); // never stack two
   const button = document.createElement('button');
   button.textContent = 'Multiplayer';
   button.className = 'mp-opt-in';
   button.addEventListener('click', () => {
-    button.remove();
+    removeMultiplayerButton();
     openLobby(gameContext.gameData?.courseUrl ?? '', new URLSearchParams());
   });
   document.body.append(button);
-  // it lives on the loading screen and through the first shot; once a ball is
-  // struck, switching would throw away a round in progress
-  app.on('shot', () => button.remove());
 }
 
 async function setupCourse() {
@@ -905,6 +920,11 @@ function leaveRoom() {
 
 // listen for setup event from OpenGolfSim app
 app.on('setup', handleSetup);
+// Once a ball is struck the round is committed, so retire the multiplayer opt-in
+// (switching now would throw the round away). Registered BEFORE launchShot:
+// eventemitter3 runs listeners in order and stops at the first one that throws,
+// so this must not sit downstream of the shot-handling code.
+app.on('shot', removeMultiplayerButton);
 // listen for shot event from OpenGolfSim app
 app.on('shot', launchShot);
 
