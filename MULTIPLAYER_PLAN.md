@@ -1,17 +1,32 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
-- ✅ **Phase 4 done** (2026-07-24) — ghost balls. Remote shots now replay their
-  flight. `NetShotResult` carries an optional downsampled world-space `trail`
-  (`src/net/types.ts`); `GameSync` attaches `golfBall.getTrailPoints()` on send
-  (capped at 240 pts, endpoints preserved). New `GhostBall`
-  (`src/objects/ghostBall.ts`) — a blue sphere + `BallTrail` that flies the path
-  at constant velocity, then lingers ~2.5s and clears. `courses.ts` creates one
-  ghost and, on a `shot` for a *non-local* player, calls `ghost.play(trail)`
-  (own shots use the real ball). Trail forwarding is verified end-to-end through
-  the relay (34 tests). `GhostBall` itself can't be unit-tested headlessly (its
-  `BallTrail` needs WebGPU) — **not yet browser-verified.** No server change:
-  the relay already forwards `result` verbatim.
+- ✅ **Shot-by-shot "away" turn model + live shots** (2026-07-25,
+  browser-verified). Two big changes on top of Phase 3:
+  1. **Turn model.** Play is now shot-by-shot: after every shot the turn passes
+     to whoever is *farthest from the pin* among players who haven't holed out
+     (honors == roster order off the tee); the hole advances only when everyone
+     holes out. `CourseGame.applyShotResult` computes this **deterministically**
+     (`#findAwayPlayer`, `_advanceHole`) from data every client already has, so
+     **no server turn arbitration is needed** — the relay's turn code
+     (`hole_complete`/`turn`, `Room.advanceTurn`) is now dormant/unused. Replaces
+     the old whole-hole-sequential model. See `src/courses/game.ts`.
+  2. **Live re-simulated shots** (replaced the trail-replay "ghost" approach).
+     The instant a player swings, `courses.ts` sends a `shot_launch` (shot params
+     + start + aim); every other client re-simulates the SAME shot on its own
+     ball via `flyRemoteShot` (reusing the real GolfBall + camera-tracking), so
+     the ball flies **in sync** (~network latency) instead of after it lands.
+     Scoring still comes from the authoritative `shot_result` on rest (GameSync).
+     Wire protocol bumped to **v2** (`shot_launch`/`launch` messages added,
+     `NetShotResult.trail` removed). `GhostBall`/trail code deleted.
+     - **Critical fix (the isReplay guard):** a re-sim reuses the local ball, so
+       its `shotEnded` could fire *after* the turn flips to us and get sent as our
+       own shot (landing at the remote player's spot → spurious finish). GameSync
+       now takes `isReplay()` and suppresses the send for replayed shots.
+       Regression-tested. This was the "both players finished at once → jumped a
+       hole" bug.
+  - 34 vitest tests pass. Browser-verified live (two tabs): away order correct,
+    remote shots fly in sync, hole advances only when both hole out.
 - ✅ **Phase 3 done + browser-verified** (2026-07-23) — `GameSync`
   (`src/net/gameSync.ts`) wires `NetClient` ↔ `CourseGame`; `courses.ts` builds
   the game from the server roster and locks input off-turn. Commits `ffdf728`,
@@ -23,8 +38,8 @@
 - ✅ **Phase 2 done** — `CourseGame` refactor + ownership.
 - ✅ **Phase 1 done** — relay server + `NetClient` + in-process relay.
 - Desktop empirical spike (needs the app + a Square) still pending; not a blocker.
-- **Next: browser-verify Phase 4** (two tabs, watch a remote shot fly), then
-  **Phase 5** robustness (disconnect/rejoin, live roster, pre-load race).
+- **Next: Phase 5** robustness (disconnect/rejoin, live roster changes, pre-load
+  race). Plus polish ideas surfaced during play — see "Backlog" below.
 
 **Verify Phase 3 in a browser (the one thing tests can't cover):** two tabs on
 `courses/index.html?courseUrl=<glb>&room=garage&name=Lake` and `...&name=Brett`
@@ -50,6 +65,37 @@ affect a built deploy (no HMR). `setupMultiplayer` isn't HMR-safe; low priority.
   Mitigate by creating GameSync earlier or buffering pre-load messages.
 **Written:** 2026-07-22
 **Repo:** clone of `OpenGolfSim/fuse` @ `6f10092` (`fix: short chip physics (#14)`)
+
+---
+
+## Backlog — what's left (2026-07-25)
+
+**The real goal:** Lake + 1 local player in the garage + Brett remote, playing a
+real round on the Square. Everything below is toward that.
+
+1. **Empirical Desktop + Square spike** (only the user can run — needs the app +
+   a launch monitor). Confirm: `OGS_APP_URL` points Desktop at our local/fork
+   build; the Desktop-loaded fuse page can open `ws://` to the relay; Square
+   shots flow through as `app.on('shot')`. This validates the whole thing on real
+   hardware. See the Desktop spike notes further down.
+2. **Real-world connectivity.** For Lake↔Brett over the internet: run the
+   standalone relay (`npm run server`, set `OGS_MP_SECRET`), port-forward its
+   port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
+   end-to-end. (The in-process vite relay is dev-only.)
+3. **Phase 5 — robustness.** Disconnect/rejoin so the roster survives a client
+   dropping mid-round; handle live roster changes after start (currently ignored
+   — a late joiner/leaver isn't reflected); pre-load race (a shot that arrives
+   before a client finishes loading the GLB can be missed — GameSync is created
+   after load); a "waiting for Brett…" UI state.
+4. **Tidy-up.** The server's turn machinery (`hole_complete`/`turn`,
+   `Room.advanceTurn`, `currentPlayerIndex`, `finished`) is now dead — turn order
+   is client-side and deterministic. Safe to delete when convenient (its tests
+   too). `setTurn` in `CourseGame` is likewise unused now.
+5. **Play-feel polish (surfaced while testing).** The ~3s post-shot settle before
+   the next player is noticeable; the gimme/auto-putt "you're done the instant you
+   touch the green" (even from ~20m) can feel abrupt — worth revisiting the
+   putting/gimme UX for shot-by-shot. Optional live ghost-landing reconciliation
+   if re-sim ever visibly diverges from the authoritative landing.
 
 ---
 

@@ -10,7 +10,6 @@ import {
   CourseGame,
   CourseKeyboardControls,
   GolfBall,
-  GhostBall,
   ShotPerspectiveCamera,
   UICourseMap,
   UIShotData,
@@ -45,7 +44,6 @@ const gameContext: {
   scene?: THREE.Scene;
   renderer?: FuseRenderer,
   golfBall?: GolfBall,
-  ghostBall?: GhostBall,
   lightGroup?: CourseLight,
   fog?: THREE.Fog,  
   clouds?: VolumetricClouds,
@@ -80,6 +78,9 @@ const gameContext: {
   gameSync?: GameSync,
   clientId?: string,
   localPlayerIds?: string[],
+  // true while the ball is flying a re-simulated remote shot (not a real local
+  // shot) — GameSync must not report its landing as our own result
+  replayingRemoteShot?: boolean,
   // State
   distanceToAim: number,
   heightToAim: number,
@@ -110,13 +111,55 @@ function launchShot(shot: OpenGolfSim.Shot) {
   }
 
   if (shot.ballSpeed && !gameContext.golfBall.isShotActive) {
+    // Multiplayer: tell everyone else to fly this exact shot live (before we
+    // launch it locally), so remote clients see the ball in the air in sync
+    // instead of waiting for it to land.
+    if (gameContext.net && gameContext.game?.isLocalTurn) {
+      gameContext.net.sendShotLaunch(gameContext.game.activePlayer.id, {
+        shot,
+        start: gameContext.startPoint.toArray() as [number, number, number],
+        aim: gameContext.aimPoint.toArray() as [number, number, number],
+      });
+    }
+
+    // this is a real local shot, so GameSync should report its result
+    gameContext.replayingRemoteShot = false;
     gameContext.shotData?.updateShotData(shot);
     gameContext.golfBall.launchShot(shot);
-    
+
     // tracking scale controls how long we wait before tracking a shot between (0-150 MPH)
     const trackingScale = Math.min(shot.ballSpeed / 150, 1);
     gameContext.camera?.setTracking(true, trackingScale);
   }
+}
+
+/**
+ * A remote player swung — reproduce their shot on our ball so we watch it fly
+ * live (same physics, same camera-tracking as a local shot). Scoring still
+ * arrives authoritatively via GameSync's 'shot' handler when it lands.
+ */
+function flyRemoteShot(launch: { shot: OpenGolfSim.Shot, start: [number, number, number], aim: [number, number, number] }) {
+  if (!gameContext.golfBall || !gameContext.game) return;
+  if (gameContext.golfBall.isShotActive) return; // already flying (rare race)
+
+  const start = new THREE.Vector3().fromArray(launch.start);
+  const aim = new THREE.Vector3().fromArray(launch.aim);
+  const pin = gameContext.game.activeHole.waypoints.get('pin');
+
+  // Mark this as a replay so GameSync never reports its landing as our own shot
+  // (the authoritative result comes from the shooter). Must be set before launch.
+  gameContext.replayingRemoteShot = true;
+
+  gameContext.startPoint.copy(start);
+  gameContext.aimPoint.copy(aim);
+  gameContext.golfBall.reset(aim, start, pin);
+  gameContext.camera?.setPositions(start, aim);
+
+  gameContext.shotData?.updateShotData(launch.shot);
+  gameContext.golfBall.launchShot(launch.shot);
+
+  const trackingScale = Math.min((launch.shot.ballSpeed || 100) / 150, 1);
+  gameContext.camera?.setTracking(true, trackingScale);
 }
 
 function setupNextShot() {
@@ -422,17 +465,16 @@ async function setupCourse() {
   // In multiplayer, GameSync routes shots through the relay and applies them on
   // the echo (CourseGame's built-in ball adapter is off when networked).
   if (gameContext.net) {
-    gameContext.gameSync = new GameSync(gameContext.game, gameContext.net, gameContext.golfBall);
+    gameContext.gameSync = new GameSync(gameContext.game, gameContext.net, gameContext.golfBall, {
+      isReplay: () => !!gameContext.replayingRemoteShot,
+    });
 
-    // Phase 4 — ghost balls. A remote player's shot never runs local physics,
-    // so replay its flight path as a separate ghost. Our own shots use the real
-    // ball, so skip those (localPlayerIds owns them).
-    gameContext.ghostBall = new GhostBall(gameContext.scene);
-    gameContext.net.on('shot', ({ playerId, result }) => {
+    // Live shots — when a remote player swings, fly the same shot on our ball so
+    // we watch it in the air in sync (our own swings already fired locally, so
+    // skip those). GameSync handles the authoritative score when it lands.
+    gameContext.net.on('launch', ({ playerId, launch }) => {
       if (!gameContext.game || gameContext.game.localPlayerIds.has(playerId)) return;
-      if (result.trail && result.trail.length >= 2) {
-        gameContext.ghostBall?.play(result.trail);
-      }
+      flyRemoteShot(launch);
     });
   }
   gameContext.game?.on('nextShot', (player) => {
@@ -535,9 +577,6 @@ function animate(animDelta: number) {
   if (gameContext.golfBall) {
     gameContext.golfBall.update(delta);
   }
-
-  // Replay a remote player's shot as a ghost (multiplayer only).
-  gameContext.ghostBall?.update(delta);
 
   gameContext.renderer?.clear();
 

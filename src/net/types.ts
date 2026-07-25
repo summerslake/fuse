@@ -5,7 +5,7 @@
  * Keep PROTOCOL_VERSION in sync with server/relay.js.
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** A roster player as the server tracks it: a Player with a namespaced id + owner. */
 export interface RosterPlayer {
@@ -26,7 +26,8 @@ export interface RoomSnapshot {
 
 /**
  * Payload of a completed shot sent across the wire — enough to score it on every
- * client AND replay it as a ghost ball (Phase 4).
+ * client. The visible flight is reproduced separately from the launch params
+ * (see NetShotLaunch), so this only needs the resting state for scoring.
  */
 export interface NetShotResult {
   /** ball resting position [x, y, z] */
@@ -34,12 +35,20 @@ export interface NetShotResult {
   /** surface the ball came to rest on; only `type` is needed for scoring */
   surface?: { type?: string };
   isHoled: boolean;
-  /**
-   * World-space flight path [x, y, z][] for ghost-ball replay on other clients.
-   * Optional: scoring never needs it, and a client that omits it still works.
-   * Downsampled to keep the message well under the relay's payload cap.
-   */
-  trail?: [number, number, number][];
+}
+
+/**
+ * Sent the instant a player swings, so every other client can fly the same shot
+ * live (re-simulate the physics) instead of waiting for it to land. Purely
+ * visual — scoring still comes from the authoritative NetShotResult on rest.
+ */
+export interface NetShotLaunch {
+  /** the launch-monitor shot to reproduce */
+  shot: OpenGolfSim.Shot;
+  /** the shooter's ball position [x, y, z] */
+  start: [number, number, number];
+  /** the shooter's aim point [x, y, z] (sets the ball's direction) */
+  aim: [number, number, number];
 }
 
 // ---- client -> server ----
@@ -57,6 +66,11 @@ export interface ShotResultMessage {
   playerId: string;
   result: NetShotResult;
 }
+export interface ShotLaunchMessage {
+  type: 'shot_launch';
+  playerId: string;
+  launch: NetShotLaunch;
+}
 export interface HoleCompleteMessage {
   type: 'hole_complete';
   playerId: string;
@@ -69,6 +83,7 @@ export interface LeaveMessage {
 export type ClientMessage =
   | JoinMessage
   | ShotResultMessage
+  | ShotLaunchMessage
   | HoleCompleteMessage
   | LeaveMessage;
 
@@ -90,6 +105,11 @@ export interface ShotMessage {
   playerId: string;
   result: NetShotResult;
 }
+export interface LaunchMessage {
+  type: 'launch';
+  playerId: string;
+  launch: NetShotLaunch;
+}
 export interface TurnMessage {
   type: 'turn';
   playerId: string | null;
@@ -103,5 +123,6 @@ export type ServerMessage =
   | JoinedMessage
   | RosterMessage
   | ShotMessage
+  | LaunchMessage
   | TurnMessage
   | ErrorMessage;

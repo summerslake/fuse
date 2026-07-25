@@ -96,14 +96,15 @@ async function setupSession(port: number): Promise<{ a: Side; b: Side }> {
   return { a, b };
 }
 
-/** Emit a shot on `shooter`'s ball and resolve once both clients have processed it. */
+/** Emit a shot on `shooter`'s ball and resolve once both clients have applied
+ *  it. The turn advances deterministically inside applyShotResult — there is no
+ *  separate 'turn' message to wait on. */
 async function shoot(
   a: Side, b: Side, shooter: Side,
-  opts: { pos: [number, number, number]; surface?: string; isHoled?: boolean; finishing?: boolean },
+  opts: { pos: [number, number, number]; surface?: string; isHoled?: boolean },
 ) {
-  // register all waiters BEFORE emitting so nothing is missed
+  // register both waiters BEFORE emitting so nothing is missed
   const waits = [once(a.net, 'shot'), once(b.net, 'shot')];
-  if (opts.finishing) waits.push(once(a.net, 'turn'), once(b.net, 'turn'));
   shooter.ball.object.position.fromArray(opts.pos);
   shooter.ball.emit('shotEnded', {
     surface: opts.surface ? { type: opts.surface } : undefined,
@@ -116,7 +117,7 @@ const scores = (g: CourseGame) =>
   g.players.map((p) => [p.id, Object.fromEntries(p.scorecard)] as const);
 
 describe('GameSync — two clients play a synced round', () => {
-  it('keeps scorecards and turn identical across a full hole rotation', async () => {
+  it('keeps scorecards and away turn order identical across a full hole', async () => {
     relay = createRelay({ port: 0 });
     await relay.ready;
     const port = relay.wss.address().port as number;
@@ -125,32 +126,36 @@ describe('GameSync — two clients play a synced round', () => {
     const idA = a.game.players[0].id; // roster[0], owned by A
     const idB = a.game.players[1].id; // owned by B
 
-    // first player is A on both clients
+    // both on the tee -> honors to A on both clients
     expect(a.game.activePlayer.id).toBe(idA);
     expect(b.game.activePlayer.id).toBe(idA);
     expect(a.game.isLocalTurn).toBe(true);
     expect(b.game.isLocalTurn).toBe(false);
 
-    // A: fairway (not finishing) — same player continues, both stay synced
-    await shoot(a, b, a, { pos: [0, 0, 50], surface: 'fairway' });
-    expect(a.game.activePlayer.id).toBe(idA);
-    expect(b.game.activePlayer.id).toBe(idA);
-    expect(a.game.players[0].scorecard.get('1')).toBe(1);
-    expect(b.game.players[0].scorecard.get('1')).toBe(1);
-
-    // A: onto the green ~1m from pin -> auto-putt 1 -> hole done, turn to B
-    await shoot(a, b, a, { pos: [0, 0, 149], surface: 'green', finishing: true });
-    expect(a.game.players[0].scorecard.get('1')).toBe(3); // 1 + 1 + 1
+    // A tees off to z=30 (120 from pin) -> B is now away (still on the tee, 150)
+    await shoot(a, b, a, { pos: [0, 0, 30], surface: 'fairway' });
     expect(a.game.activePlayer.id).toBe(idB);
     expect(b.game.activePlayer.id).toBe(idB);
-    expect(a.game.isLocalTurn).toBe(false);
-    expect(b.game.isLocalTurn).toBe(true); // B's turn now
+    expect(b.game.isLocalTurn).toBe(true);
+    expect(a.game.players[0].scorecard.get('1')).toBe(1);
 
-    // B: green ~10m from pin -> auto-putt 3 -> hole done, advance to hole 2
-    await shoot(a, b, b, { pos: [0, 0, 140], surface: 'green', finishing: true });
-    expect(a.game.players[1].scorecard.get('1')).toBe(4); // 1 + 3
+    // B tees off to z=50 (100 from pin) -> A (120) is farther again
+    await shoot(a, b, b, { pos: [0, 0, 50], surface: 'fairway' });
+    expect(a.game.activePlayer.id).toBe(idA);
+    expect(b.game.activePlayer.id).toBe(idA);
 
-    // both advanced to hole 2, first player up, everyone re-enabled
+    // A onto the green 2m from pin -> auto-putt 1 -> A holes out (1+1+1 = 3)
+    await shoot(a, b, a, { pos: [0, 0, 148], surface: 'green' });
+    expect(a.game.players[0].scorecard.get('1')).toBe(3);
+    expect(a.game.players[0].disabled).toBe(true);
+    expect(a.game.activePlayer.id).toBe(idB); // only B left on the hole
+    expect(b.game.activePlayer.id).toBe(idB);
+
+    // B onto the green 3m from pin -> auto-putt 2 -> B holes out (1+1+2 = 4)
+    await shoot(a, b, b, { pos: [0, 0, 147], surface: 'green' });
+    expect(a.game.players[1].scorecard.get('1')).toBe(4);
+
+    // everyone holed out -> advance to hole 2, honors back to A, flags reset
     expect(a.game.activeHole.number).toBe('2');
     expect(b.game.activeHole.number).toBe('2');
     expect(a.game.activePlayer.id).toBe(idA);
@@ -160,30 +165,6 @@ describe('GameSync — two clients play a synced round', () => {
 
     // the whole scorecard state matches across clients
     expect(scores(a.game)).toEqual(scores(b.game));
-  });
-
-  it('forwards a downsampled ghost-ball trail to the other client, endpoints intact', async () => {
-    relay = createRelay({ port: 0 });
-    await relay.ready;
-    const port = relay.wss.address().port as number;
-    const { a, b } = await setupSession(port);
-
-    // A's ball reports a long flight path; GameSync should downsample it (cap
-    // 240) but always keep the first and last point.
-    const N = 1000;
-    const path: [number, number, number][] = [];
-    for (let i = 0; i < N; i++) path.push([i, Math.sin(i / 50) * 30, i * 0.5]);
-    a.ball.getTrailPoints = () => path.map((p) => [...p]);
-
-    const gotB = once(b.net, 'shot');
-    a.ball.object.position.fromArray(path[N - 1]);
-    a.ball.emit('shotEnded', { surface: { type: 'fairway' }, isHoled: false });
-    const shot = await gotB;
-
-    expect(shot.result.trail.length).toBeGreaterThan(1);
-    expect(shot.result.trail.length).toBeLessThanOrEqual(240);
-    expect(shot.result.trail[0]).toEqual(path[0]);
-    expect(shot.result.trail.at(-1)).toEqual(path[N - 1]);
   });
 
   it('a shot for a player the sender does not own never reaches the other client', async () => {
@@ -200,5 +181,29 @@ describe('GameSync — two clients play a synced round', () => {
     await new Promise((r) => setTimeout(r, 150));
     expect(bApplied).toBe(false);
     expect(b.game.players[1].scorecard.size).toBe(0);
+  });
+});
+
+describe('GameSync — isReplay guard', () => {
+  it('never sends a result for a re-simulated remote shot, even once it is our turn', () => {
+    const sent: Array<{ id: string }> = [];
+    const fakeNet: any = new EventEmitter();
+    fakeNet.sendShotResult = (id: string) => sent.push({ id });
+
+    const ball: any = new EventEmitter();
+    ball.object = { position: new THREE.Vector3(1, 2, 3) };
+
+    // It IS our turn (the race: the turn has flipped to us by the time the
+    // replayed ball lands). Only the replay flag should suppress the send.
+    const game: any = { isLocalTurn: true, activePlayer: { id: 'me' }, applyShotResult() {} };
+    let replaying = true;
+    new GameSync(game, fakeNet, ball, { isReplay: () => replaying });
+
+    ball.emit('shotEnded', { surface: { type: 'green' }, isHoled: false });
+    expect(sent.length).toBe(0); // replay -> suppressed
+
+    replaying = false;
+    ball.emit('shotEnded', { surface: { type: 'green' }, isHoled: false });
+    expect(sent).toEqual([{ id: 'me' }]); // real local shot -> sent
   });
 });

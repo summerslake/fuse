@@ -6,8 +6,10 @@ import {
   type JoinedMessage,
   type RosterMessage,
   type ShotMessage,
+  type LaunchMessage,
   type TurnMessage,
   type NetShotResult,
+  type NetShotLaunch,
 } from './types';
 
 export interface NetClientJoinParams {
@@ -23,6 +25,8 @@ interface NetClientEvents {
   joined: (msg: JoinedMessage) => void;
   roster: (msg: RosterMessage) => void;
   shot: (msg: ShotMessage) => void;
+  /** a player just swung — fly the same shot live (re-simulate) */
+  launch: (msg: LaunchMessage) => void;
   turn: (msg: TurnMessage) => void;
   /** server-sent error (bad secret, version mismatch, courseUrl mismatch, …) */
   error: (message: string) => void;
@@ -99,6 +103,9 @@ export class NetClient extends EventEmitter<NetClientEvents> {
       case 'shot':
         this.emit('shot', msg);
         break;
+      case 'launch':
+        this.emit('launch', msg);
+        break;
       case 'turn':
         this.emit('turn', msg);
         break;
@@ -124,6 +131,11 @@ export class NetClient extends EventEmitter<NetClientEvents> {
 
   sendShotResult(playerId: string, result: NetShotResult) {
     this.#send({ type: 'shot_result', playerId, result });
+  }
+
+  /** Announce a swing so other clients can fly it live (before it lands). */
+  sendShotLaunch(playerId: string, launch: NetShotLaunch) {
+    this.#send({ type: 'shot_launch', playerId, launch });
   }
 
   sendHoleComplete(playerId: string, holeNumber: string, strokes: number) {

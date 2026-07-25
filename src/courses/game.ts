@@ -204,24 +204,22 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
    * ball's shotEnded adapter (single-machine) or by GameSync on a network echo
    * (multiplayer) — same shape either way. No reference to the local GolfBall.
    *
-   * Turn-based invariant: the shot belongs to the player whose turn it is, so
-   * `playerId` is expected to be the active player. We resolve the shooter from
-   * `playerId` (rather than assuming activePlayer) so out-of-order network
-   * results score the right player.
+   * Turn model: **shot-by-shot, "away" plays next.** After every shot the turn
+   * passes to the player whose ball lies farthest from the pin among those who
+   * haven't holed out. When everyone has holed out, advance to the next hole
+   * (honors = roster order off the tee, where all lies are equal). This is fully
+   * deterministic from the shot data + course, so every networked client
+   * computes the identical turn without any server arbitration.
    *
-   * @param opts.advanceTurn  When true (default, single-machine), a finished
-   *   hole rotates to the next player locally. When false (multiplayer), scoring
-   *   happens but the turn does NOT advance here — the server decides the next
-   *   turn and GameSync calls setTurn. In that mode nextShot is emitted only when
-   *   the same player keeps shooting (hole not finished).
-   * @returns whether this shot finished the player's hole.
+   * The shooter is resolved from `playerId` (not assumed to be activePlayer) so
+   * a late/echoed network result still scores the right player.
+   *
+   * @returns whether this shot holed out / finished the player's hole.
    */
   applyShotResult(
     playerId: string,
     result: ShotResultInput,
-    opts: { advanceTurn?: boolean } = {},
   ): ShotResultOutcome {
-    const advanceTurn = opts.advanceTurn ?? true;
     const player = this.players.find(p => p.id === playerId);
     if (!player) {
       throw new Error(`applyShotResult: no player with id ${playerId}`);
@@ -246,10 +244,8 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       if (result.isHoled) {
         holeFinished = true;
         console.log(`Ball in hole! End hole`);
-        // Finalize the shooter's hole score, then (single-machine) rotate.
         this._addStrokes(player, 0, true);
         player.disabled = true;
-        if (advanceTurn) this._nextPlayer();
       } else if (result.surface?.type === 'green' && !this.puttingEnabled) {
         holeFinished = true;
         // total score
@@ -267,17 +263,22 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
         // disable player when they finish a hole (so they are not selectable in UI)
         player.disabled = true;
-        if (advanceTurn) this._nextPlayer();
       }
     }
 
-    // Emit nextShot to reconfigure the scene for whoever is now active. In
-    // networked mode, a FINISHED hole waits for the server's turn -> setTurn
-    // instead (so we don't set up the finished player to shoot again).
-    if (advanceTurn || !holeFinished) {
-      this.updateAimPoint(this.activePlayer.start);
-      this.emit('nextShot', this.activePlayer);
+    // Shot-by-shot: recompute who's up after every shot.
+    if (this.players.every(p => p.disabled)) {
+      // everyone holed out this hole -> next hole (or the round is over)
+      if (!this._advanceHole()) {
+        this.emit('roundEnded');
+        return { holeFinished };
+      }
     }
+    this.currentPlayerIndex = this.#findAwayPlayer();
+    this.activePlayer = this.players[this.currentPlayerIndex];
+
+    this.updateAimPoint(this.activePlayer.start);
+    this.emit('nextShot', this.activePlayer);
 
     return { holeFinished };
   }
@@ -288,49 +289,41 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     this._setupHole();
   }
 
-  _nextHole() {
-    const nextUnfinishedHole = this.#orderedHoles.findIndex(hole => !this.#allPlayersFinishedHole(hole.number));
-    if (nextUnfinishedHole === -1) {
+  /**
+   * Advance to the next hole in order. Resets positions/disabled via _setupHole.
+   * @returns false when there is no next hole (the round is over).
+   */
+  _advanceHole(): boolean {
+    const next = this.currentHoleIndex + 1;
+    if (next >= this.#orderedHoles.length) {
       console.log('Course finished!');
-      this.emit('roundEnded');
-      return;
+      return false;
     }
-    this.currentHoleIndex = nextUnfinishedHole;
-    this.activeHole = this.#orderedHoles[this.currentHoleIndex]
+    this.currentHoleIndex = next;
+    this.activeHole = this.#orderedHoles[this.currentHoleIndex];
     this._setupHole();
+    return true;
   }
 
-  #findNextPlayerUp() {
-    // default rotation type
-    // loop through until we find the next player that hasn't finished the hole
-    for (let i = 1; i <= this.players.length; i++) {
-      const index = (this.currentPlayerIndex + i) % this.players.length;
-      const finished = this.players[index].hasFinishedHole(this.activeHole.number);
-      if (!finished) {
-        return index;
+  /**
+   * Index of the player who is "away" — farthest from the pin among those who
+   * haven't holed out. Ties (e.g. everyone on the tee) resolve to the earliest
+   * roster position via the strict `>`, so honors == roster order off the tee.
+   * Deterministic across clients: identical lies + pin -> identical result.
+   */
+  #findAwayPlayer(): number {
+    let bestIndex = 0;
+    let bestDist = -Infinity;
+    this.players.forEach((player, index) => {
+      if (player.disabled) return; // holed out this hole
+      const pin = player.pin;
+      const dist = pin ? player.start.distanceTo(pin) : 0;
+      if (dist > bestDist) {
+        bestDist = dist;
+        bestIndex = index;
       }
-    }
-    return -1;
-  }
-
-  #allPlayersFinishedHole(holeNumber?: string) {
-    return this.players.every(player => player.hasFinishedHole(holeNumber ? holeNumber : this.activeHole.number))
-  }
-
-  _nextPlayer() {
-    if (this.#allPlayersFinishedHole()) {
-      console.log('All players have finished hole');
-      // TODO: respect honors of last hole?
-      this.currentPlayerIndex = 0;
-      this._nextHole();
-    } else {
-      const nextUp = this.#findNextPlayerUp();
-      if (nextUp === -1) {
-        throw new Error('Could not determine next player!');
-      }
-      this.currentPlayerIndex = nextUp;
-    }
-    this.activePlayer = this.players[this.currentPlayerIndex];
+    });
+    return bestIndex;
   }
 
   currentHole() {

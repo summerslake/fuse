@@ -90,6 +90,28 @@ describe('relay ↔ NetClient', () => {
     expect(s2.result).toEqual({ ballSpeed: 100 });
   });
 
+  it('broadcasts a live shot_launch to everyone including the sender', async () => {
+    const port = await startRelay();
+    const { c1, c2, id1 } = await joinTwo(port);
+    const onC1 = once(c1, 'launch');
+    const onC2 = once(c2, 'launch');
+    const launch = { shot: { ballSpeed: 120 }, start: [0, 0, 0], aim: [0, 0, 100] } as any;
+    c1.sendShotLaunch(id1, launch);
+    const [l1, l2] = await Promise.all([onC1, onC2]);
+    expect(l1.playerId).toBe(id1);
+    expect(l2.launch).toEqual(launch);
+  });
+
+  it('drops a shot_launch for a player the sender does not own', async () => {
+    const port = await startRelay();
+    const { c1, c2, id2 } = await joinTwo(port);
+    let c2GotLaunch = false;
+    c2.on('launch', () => { c2GotLaunch = true; });
+    c1.sendShotLaunch(id2, { shot: { ballSpeed: 1 }, start: [0, 0, 0], aim: [0, 0, 1] } as any);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(c2GotLaunch).toBe(false);
+  });
+
   it('advances the turn on hole_complete', async () => {
     const port = await startRelay();
     const { c1, c2, id1, id2 } = await joinTwo(port);

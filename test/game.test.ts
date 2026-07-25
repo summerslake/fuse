@@ -4,14 +4,14 @@ import { CourseGame } from '@/courses/game';
 import { type Hole } from '@/courses/types';
 
 /**
- * Phase 2 safety-gate tests for the CourseGame extraction.
+ * Tests for CourseGame's shot-by-shot "away" turn model.
  *
- * CourseGame's scoring/rotation was extracted out of the local ball's
- * `shotEnded` handler into `applyShotResult(playerId, result)`. These tests
- * drive that method directly (no GolfBall, no rapier, no GPU) and assert the
- * hot-seat behavior that must remain identical to `main`: turn rotation,
- * scorecard, auto-putt, hole advance, round end. They also cover the new
- * ownership surface (isLocalTurn, selectPlayer restriction, setTurn).
+ * After every shot the turn passes to the player whose ball is farthest from
+ * the pin among those who haven't holed out; when everyone holes out, play
+ * advances to the next hole (honors == roster order off the tee). These tests
+ * drive `applyShotResult(playerId, result)` directly (no GolfBall, no rapier, no
+ * GPU) and follow the active player the way real play does. Turn arbitration is
+ * deterministic here, which is exactly what keeps networked clients in sync.
  */
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -60,49 +60,72 @@ function makeGame(playerIds = ['p1', 'p2'], localPlayerIds?: string[]) {
 const fairway = (z: number) => ({ endPosition: V(0, 0, z), surface: { type: 'fairway' } as any, isHoled: false });
 const green = (z: number) => ({ endPosition: V(0, 0, z), surface: { type: 'green' } as any, isHoled: false });
 const player = (g: CourseGame, id: string) => g.players.find((p) => p.id === id)!;
+/** Play a shot for whoever is currently up (mirrors real turn-gated play). */
+const play = (g: CourseGame, result: any) => g.applyShotResult(g.activePlayer.id, result);
 
-describe('CourseGame — turn rotation & scorecard', () => {
+describe('CourseGame — shot-by-shot away rotation', () => {
   let g: CourseGame;
   beforeEach(() => { g = makeGame(); });
 
-  it('starts on player 1, hole 1', () => {
+  it('starts on player 1 (roster-order honors), hole 1', () => {
     expect(g.activePlayer.id).toBe('p1');
     expect(g.activeHole.number).toBe('1');
   });
 
-  it('keeps the same player shooting until they finish the hole', () => {
-    g.applyShotResult('p1', fairway(50));
-    expect(g.activePlayer.id).toBe('p1');           // no rotation on a fairway lie
+  it('passes the turn to whoever is now farthest from the pin', () => {
+    // both on the tee (150 from pin) -> honors to p1
+    play(g, fairway(30));                             // p1 -> 120 from pin
     expect(player(g, 'p1').scorecard.get('1')).toBe(1);
-    expect(player(g, 'p1').strokes).toBe(1);
-    expect(player(g, 'p1').start.z).toBe(50);        // start moved to landing
+    expect(g.activePlayer.id).toBe('p2');            // p2 still on tee (150) -> away
+
+    play(g, fairway(50));                             // p2 -> 100 from pin
+    expect(g.activePlayer.id).toBe('p1');            // p1 (120) now farther than p2 (100)
+    expect(player(g, 'p2').scorecard.get('1')).toBe(1);
   });
 
-  it('auto-putts on the green, finalizes the hole, and rotates to the next player', () => {
-    g.applyShotResult('p1', fairway(50));            // stroke 1
-    g.applyShotResult('p1', green(148));             // stroke 2, 2m from pin -> gimme[0], autoPutt 1
+  it('lets the same player hit twice in a row while they stay farthest', () => {
+    play(g, fairway(30));                             // p1 -> 120, hand to p2
+    play(g, fairway(80));                             // p2 -> 70, p1 (120) still farthest
+    expect(g.activePlayer.id).toBe('p1');            // p1 hits again
+    expect(player(g, 'p1').strokes).toBe(1);         // p1 has only played once so far
+  });
+
+  it('holing out finalizes the shooter and hands off to the remaining player', () => {
+    // p1 aces the par 3 on the tee shot
+    play(g, { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true });
+    const p1 = player(g, 'p1');
+    expect(p1.scorecard.get('1')).toBe(1);
+    expect(p1.toPar).toBe(-2);                       // 1 on a par 3
+    expect(p1.disabled).toBe(true);
+    expect(g.activePlayer.id).toBe('p2');            // only p2 left on the hole
+  });
+
+  it('auto-putts on the green, finalizes the hole, and moves off that player', () => {
+    play(g, fairway(30));                             // p1 -> 120, to p2
+    play(g, fairway(50));                             // p2 -> 100, to p1
+    play(g, green(148));                              // p1 on green 2m out -> gimme[0], autoPutt 1
 
     const p1 = player(g, 'p1');
-    expect(p1.scorecard.get('1')).toBe(3);           // 2 + auto-putt 1
-    expect(p1.toPar).toBe(0);                        // 3 on a par 3
+    expect(p1.scorecard.get('1')).toBe(3);           // stroke 1 (tee) + 1 (green) + auto-putt 1
+    expect(p1.toPar).toBe(0);
     expect(p1.disabled).toBe(true);
-    expect(g.activePlayer.id).toBe('p2');            // rotated
+    expect(g.activePlayer.id).toBe('p2');            // p1 done -> p2 up
   });
 
-  it('advances to the next hole once all players finish, resetting active player and disabled flags', () => {
-    // p1 finishes hole 1 in 3
-    g.applyShotResult('p1', fairway(50));
-    g.applyShotResult('p1', green(148));
-    // p2 finishes hole 1 in 4 (3m from pin -> autoPutt 2)
-    g.applyShotResult('p2', fairway(60));
-    g.applyShotResult('p2', green(147));
+  it('advances to the next hole once everyone holes out, resetting active player and flags', () => {
+    // p1 finishes hole 1
+    play(g, fairway(30));                             // p1 -> 120, to p2
+    play(g, fairway(50));                             // p2 -> 100, to p1
+    play(g, green(148));                              // p1 finishes (3), to p2
+    expect(g.activePlayer.id).toBe('p2');
+    play(g, green(147));                              // p2 on green 3m -> gimme[1], autoPutt 2 -> finishes
 
     const p2 = player(g, 'p2');
-    expect(p2.scorecard.get('1')).toBe(4);
-    expect(p2.toPar).toBe(1);                        // 4 on a par 3
+    expect(p2.scorecard.get('1')).toBe(4);           // 1 (tee) + 1 (green) + auto-putt 2
+    expect(p2.toPar).toBe(1);
     expect(g.activeHole.number).toBe('2');           // advanced hole
-    expect(g.activePlayer.id).toBe('p1');            // back to first player
-    expect(player(g, 'p1').disabled).toBe(false);    // re-enabled for the new hole
+    expect(g.activePlayer.id).toBe('p1');            // honors back to roster order on the tee
+    expect(player(g, 'p1').disabled).toBe(false);
     expect(p2.disabled).toBe(false);
   });
 
@@ -110,33 +133,32 @@ describe('CourseGame — turn rotation & scorecard', () => {
     let ended = false;
     g.on('roundEnded', () => { ended = true; });
 
-    for (const id of ['p1', 'p2']) {                 // hole 1
-      g.applyShotResult(id, fairway(50));
-      g.applyShotResult(id, green(149));
-    }
-    for (const id of ['p1', 'p2']) {                 // hole 2
-      g.applyShotResult(id, fairway(80));
-      g.applyShotResult(id, green(199));
-    }
+    // hole 1: both hole out (drive onto green near pin -> auto-putt)
+    play(g, green(149));                              // p1 finishes hole 1
+    play(g, green(149));                              // p2 finishes hole 1 -> advance to hole 2
+    expect(g.activeHole.number).toBe('2');
+
+    // hole 2 (pin z=200): both hole out
+    play(g, green(199));                              // p1 finishes hole 2
+    expect(ended).toBe(false);                        // p2 still to play
+    play(g, green(199));                              // p2 finishes hole 2 -> round over
     expect(ended).toBe(true);
   });
 });
 
-describe('CourseGame — player ownership (new in Phase 2)', () => {
+describe('CourseGame — player ownership', () => {
   it('owns every player by default, so isLocalTurn is always true', () => {
     const g = makeGame();
     expect(g.isLocalTurn).toBe(true);
-    g.applyShotResult('p1', fairway(50));
-    g.applyShotResult('p1', green(148));             // now p2 is active
+    play(g, fairway(30));                             // now p2 is up
     expect(g.activePlayer.id).toBe('p2');
     expect(g.isLocalTurn).toBe(true);                // still owned
   });
 
   it('isLocalTurn is false when the active player is not owned', () => {
     const g = makeGame(['p1', 'p2'], ['p1']);        // this client owns only p1
-    expect(g.isLocalTurn).toBe(true);                // p1 active
-    g.applyShotResult('p1', fairway(50));
-    g.applyShotResult('p1', green(148));             // rotate to p2
+    expect(g.isLocalTurn).toBe(true);                // p1 active on the tee
+    play(g, fairway(30));                             // rotate to p2 (away)
     expect(g.activePlayer.id).toBe('p2');
     expect(g.isLocalTurn).toBe(false);               // p2 not owned
   });
@@ -156,101 +178,24 @@ describe('CourseGame — player ownership (new in Phase 2)', () => {
   });
 });
 
-describe('CourseGame — setTurn (network-driven, unused until Phase 3)', () => {
-  it('sets active player and hole without running scoring', () => {
-    const g = makeGame();
-    let emitted: string | undefined;
-    g.on('nextShot', (p) => { emitted = p.id; });
-
-    g.setTurn('p2', '2');
-    expect(g.activePlayer.id).toBe('p2');
-    expect(g.activeHole.number).toBe('2');
-    expect(emitted).toBe('p2');
-    // scoring untouched
-    expect(player(g, 'p2').strokes).toBe(0);
-    expect(player(g, 'p2').scorecard.size).toBe(0);
-  });
-
-  it('ignores an unknown player id', () => {
-    const g = makeGame();
-    g.setTurn('nobody');
-    expect(g.activePlayer.id).toBe('p1');
-  });
-});
-
-describe('CourseGame — networked mode (advanceTurn:false)', () => {
-  it('does not wire the ball adapter when networked, so shots must be applied explicitly', () => {
+describe('CourseGame — networked mode', () => {
+  it('does not wire the ball adapter when networked (GameSync drives applyShotResult)', () => {
     const g = new CourseGame(makeCourse(), fakeBall, {
       setupData: makeSetup(['p1', 'p2']) as any,
       networked: true,
     });
     expect(g.networked).toBe(true);
-    // nothing applied yet
-    expect(player(g, 'p1').scorecard.size).toBe(0);
+    expect(player(g, 'p1').scorecard.size).toBe(0);   // nothing applied yet
   });
 
-  it('scores without rotating and reports holeFinished', () => {
+  it('applyShotResult scores and advances the away turn identically to single-machine', () => {
     const g = new CourseGame(makeCourse(), fakeBall, {
       setupData: makeSetup(['p1', 'p2']) as any,
       networked: true,
     });
-    // fairway lie: not finished, same player, no rotation
-    let out = g.applyShotResult('p1', fairway(50), { advanceTurn: false });
+    const out = g.applyShotResult('p1', fairway(30));
     expect(out.holeFinished).toBe(false);
-    expect(g.activePlayer.id).toBe('p1');
+    expect(g.activePlayer.id).toBe('p2');             // away rotation runs in networked mode too
     expect(player(g, 'p1').scorecard.get('1')).toBe(1);
-
-    // reaches green: finished, but turn does NOT advance (server will drive it)
-    out = g.applyShotResult('p1', green(148), { advanceTurn: false });
-    expect(out.holeFinished).toBe(true);
-    expect(g.activePlayer.id).toBe('p1');          // NOT rotated
-    expect(player(g, 'p1').disabled).toBe(true);
-    expect(player(g, 'p1').scorecard.get('1')).toBe(3);
-  });
-
-  it('setTurn resets positions and re-enables players on a hole change', () => {
-    const g = new CourseGame(makeCourse(), fakeBall, {
-      setupData: makeSetup(['p1', 'p2']) as any,
-      networked: true,
-    });
-    // finish hole 1 for both (no rotation in networked mode)
-    g.applyShotResult('p1', green(149), { advanceTurn: false });
-    g.applyShotResult('p2', green(149), { advanceTurn: false });
-    expect(player(g, 'p1').disabled).toBe(true);
-    expect(player(g, 'p2').disabled).toBe(true);
-
-    // server moves everyone to hole 2, first player up
-    g.setTurn('p1', '2');
-    expect(g.activeHole.number).toBe('2');
-    expect(g.activePlayer.id).toBe('p1');
-    expect(player(g, 'p1').disabled).toBe(false);  // re-enabled
-    expect(player(g, 'p2').disabled).toBe(false);
-
-    // a same-hole turn change must NOT reset positions
-    player(g, 'p1').start.set(9, 9, 9);
-    g.setTurn('p2', '2');
-    expect(g.activePlayer.id).toBe('p2');
-    expect(player(g, 'p1').start.x).toBe(9);       // untouched
-  });
-});
-
-describe('CourseGame — hole-out branch', () => {
-  // Regression test for the fixed hole-out bug: the finalize used to run after
-  // _nextPlayer(), scoring the NEXT player a spurious 0. It must finalize the
-  // shooter and leave the next player untouched.
-  it('holing out finalizes the shooter and does not touch the next player', () => {
-    const g = makeGame();
-    // p1 aces the par-3 hole 1 (holes out on the first shot)
-    g.applyShotResult('p1', { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true });
-
-    const p1 = player(g, 'p1');
-    expect(p1.scorecard.get('1')).toBe(1);           // one stroke, the ace
-    expect(p1.toPar).toBe(-2);                       // 1 on a par 3
-    expect(p1.disabled).toBe(true);
-    expect(g.activePlayer.id).toBe('p2');            // rotated to next player
-
-    const p2 = player(g, 'p2');
-    expect(p2.scorecard.has('1')).toBe(false);       // NOT marked finished
-    expect(p2.toPar).toBe(0);
   });
 });

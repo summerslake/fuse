@@ -6,7 +6,7 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CLIENTS_PER_ROOM = 8;
@@ -62,6 +62,12 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         // reject shots for players this client doesn't own
         if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
         room.broadcast({ type: 'shot', playerId: msg.playerId, result: msg.result });
+        break;
+      }
+      case 'shot_launch': {
+        // live swing announcement — same ownership rule as a shot result
+        if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
+        room.broadcast({ type: 'launch', playerId: msg.playerId, launch: msg.launch });
         break;
       }
       case 'hole_complete': {
