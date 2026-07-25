@@ -29,6 +29,7 @@ import {
   GameSync,
   UILobby,
   type UILobbyJoinParams,
+  type UILobbyCourse,
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
@@ -393,6 +394,39 @@ function aimPointUpdated(forced = false) {
  * stashed in sessionStorage. That's safe because Desktop re-sends `setup`
  * immediately on reload (measured 2026-07-25: 0.0s into the new page load).
  */
+/**
+ * True when this page was launched as the dedicated multiplayer entry (the
+ * library tile) rather than as a course. Detected by path so it survives
+ * whatever the host app does with query strings.
+ */
+function isMultiplayerEntry(): boolean {
+  return window.location.pathname.includes('/multiplayer/')
+    || new URLSearchParams(window.location.search).get('mp') === '1';
+}
+
+/**
+ * The fuse courses this build can play, straight from the host app's own
+ * catalog (same origin — the dev server proxies `/api` to OpenGolfSim). Falls
+ * back to the bundled games.json so a plain browser still gets a picker.
+ */
+async function fetchCourses(): Promise<UILobbyCourse[]> {
+  const sources = ['/api/courses/home?platform=darwin&fuse=1', '../games.json'];
+  for (const source of sources) {
+    try {
+      const response = await fetch(source);
+      if (!response.ok) continue;
+      const data = await response.json();
+      const courses = (data.courses ?? data.games ?? [])
+        .filter((entry: any) => entry.courseUrl && entry.gameMode === 2)
+        .map((entry: any) => ({ title: entry.title, url: entry.courseUrl }));
+      if (courses.length) return courses;
+    } catch {
+      // try the next source
+    }
+  }
+  return [];
+}
+
 let setupHandled = false;
 
 async function handleSetup(payload: any) {
@@ -419,8 +453,34 @@ async function handleSetup(payload: any) {
     return;
   }
 
+  // Launched from the Multiplayer tile: no course attached, so open the lobby
+  // and let it pick one. Nothing is built until the roster is settled.
+  if (isMultiplayerEntry()) {
+    startMultiplayerEntry();
+    return;
+  }
+
   preLoad();
   addMultiplayerButton();
+}
+
+/**
+ * The multiplayer entry page, from either side: OGS Desktop (which supplies the
+ * players) or a plain browser (which doesn't, so we invent one — this is how the
+ * remote player joins). Opens the lobby with a course picker and builds nothing
+ * until the roster is settled.
+ */
+async function startMultiplayerEntry() {
+  const params = new URLSearchParams(window.location.search);
+  if (!gameContext.setupData) {
+    gameContext.setupData = generateSetupData(1);
+    const name = params.get('name');
+    if (name && gameContext.setupData.players[0]) {
+      gameContext.setupData.players[0].name = name;
+    }
+  }
+  gameContext.gameData ??= { id: 'mp', courseUrl: '', gameMode: 2 };
+  openLobby('', params, undefined, await fetchCourses());
 }
 
 /** Remove every opt-in button, however many somehow got added. */
@@ -788,7 +848,12 @@ function takeLobbyIntent(): UILobbyJoinParams | undefined {
  * app supplies the players instead, and `resume` is a join we already committed
  * to before reloading.
  */
-function openLobby(courseUrl: string, params: URLSearchParams, resume?: UILobbyJoinParams) {
+function openLobby(
+  courseUrl: string,
+  params: URLSearchParams,
+  resume?: UILobbyJoinParams,
+  courses?: UILobbyCourse[],
+) {
   const saved = recallLobby();
   const hostPlayers = gameContext.playersFromHost
     ? (gameContext.setupData?.players ?? []).map((player) => player.name)
@@ -796,6 +861,7 @@ function openLobby(courseUrl: string, params: URLSearchParams, resume?: UILobbyJ
   const lobby = new UILobby(document.body, {
     courseName: courseUrl.split('/').pop(),
     hostPlayers,
+    courses,
     defaults: {
       name: resume?.name || params.get('name') || saved.name || '',
       room: resume?.room || params.get('room') || saved.room || '',
@@ -809,7 +875,8 @@ function openLobby(courseUrl: string, params: URLSearchParams, resume?: UILobbyJ
   lobby.on('join', (values) => {
     // A host-launched round is already loading behind this overlay; reload so we
     // come back clean and can build the game from the server roster instead.
-    if (gameContext.playersFromHost && !resume) {
+    // The multiplayer entry has nothing loaded yet, so it needs no reload.
+    if (gameContext.playersFromHost && !resume && !isMultiplayerEntry()) {
       storeLobbyIntent(values);
       window.location.reload();
       return;
@@ -839,6 +906,13 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   const lobby = gameContext.lobby;
   rememberLobby(values);
 
+  // Picked in the lobby (the Multiplayer tile), handed to us by the host app, or
+  // empty — in which case we inherit whatever the room is already playing.
+  const course = values.courseUrl || courseUrl;
+  if (course) {
+    gameContext.gameData = { ...(gameContext.gameData ?? { id: 'mp', gameMode: 2 }), courseUrl: course };
+  }
+
   // A host app already sent us real players with real club distances — keep them
   // exactly as they are. Only the browser demo invents players, where one field,
   // comma separated, covers the garage case: "Lake, Sarah" seats two local
@@ -854,7 +928,7 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   const net = new NetClient(`ws://${values.server}`, {
     roomCode: values.room,
     roomSecret: values.secret,
-    courseUrl,
+    courseUrl: course,
     players: setupData.players,
   });
   gameContext.net = net;
@@ -867,7 +941,7 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     console.log('[net] joined as', m.clientId);
     // Joined without naming a course: play whatever the room is playing. Saves
     // the other players from having to pass around an exact GLB url.
-    if (!courseUrl && m.room?.courseUrl) {
+    if (!course && m.room?.courseUrl) {
       console.log('[net] adopting the room course:', m.room.courseUrl);
       gameContext.gameData = { ...gameContext.gameData!, courseUrl: m.room.courseUrl };
       lobby?.setCourseName(m.room.courseUrl.split('/').pop() ?? '');
@@ -946,6 +1020,12 @@ app.on('shot', launchShot);
 
 // initialize must be called before engaging physics/world
 app.initialize(() => {
+  // The multiplayer entry page in a plain browser: no host app will ever send
+  // `setup`, so start it here. Under a host app, handleSetup does it instead.
+  if (isMultiplayerEntry() && app.appType === 'web') {
+    startMultiplayerEntry();
+    return;
+  }
   // if we passed a test course URL as a query param, we start in debug mode
   if (window.location.search) {
     initializeDebug();

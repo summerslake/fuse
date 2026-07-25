@@ -13,6 +13,17 @@ export interface UILobbyJoinParams {
   room: string;
   server: string;
   secret: string;
+  /**
+   * The course to play, when this player is the one choosing. Empty means
+   * "whatever the room is already playing" — the relay hands it back on join.
+   */
+  courseUrl?: string;
+}
+
+/** A course offered in the lobby picker. */
+export interface UILobbyCourse {
+  title: string;
+  url: string;
 }
 
 export interface UILobbyOptions {
@@ -27,6 +38,12 @@ export interface UILobbyOptions {
    * only risk detaching them from their clubs.
    */
   hostPlayers?: string[];
+  /**
+   * Courses to choose from. Given these, the lobby picks the course rather than
+   * inheriting one — this is the "Multiplayer" library tile, which launches with
+   * no course attached. Whoever opens the room decides; everyone else inherits.
+   */
+  courses?: UILobbyCourse[];
 }
 
 interface UILobbyEvents {
@@ -56,10 +73,12 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #pillLabel: HTMLElement;
   #roomTitle: HTMLElement;
   #courseLine: HTMLElement;
+  #courseSelect?: HTMLSelectElement;
   #startButton: HTMLButtonElement;
   #joinButton: HTMLButtonElement;
   #hostPlayers: string[];
-  #inputs: Record<keyof UILobbyJoinParams, HTMLInputElement>;
+  /** the text fields; `courseUrl` is a select, handled separately */
+  #inputs: Record<'name' | 'room' | 'server' | 'secret', HTMLInputElement>;
 
   constructor(parent: string | Element, options: UILobbyOptions = {}) {
     super(parent);
@@ -98,6 +117,25 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
         if ((ev as KeyboardEvent).key === 'Enter') this.#emitJoin();
       });
     }
+    const courses = options.courses ?? [];
+    if (courses.length) {
+      const wrapper = document.createElement('div');
+      wrapper.className = styles.lobbyField;
+      const label = document.createElement('label');
+      label.className = styles.lobbyLabel;
+      label.textContent = 'Course';
+      this.#courseSelect = document.createElement('select');
+      this.#courseSelect.className = styles.lobbyInput;
+      this.#courseSelect.append(...courses.map((course) => {
+        const option = document.createElement('option');
+        option.value = course.url;
+        option.textContent = course.title;
+        return option;
+      }));
+      wrapper.append(label, this.#courseSelect);
+      this.#form.prepend(wrapper);
+    }
+
     if (hostPlayers.length) {
       const wrapper = document.createElement('div');
       wrapper.className = styles.lobbyField;
@@ -153,6 +191,8 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     this.#courseLine.textContent = options.courseName
       ? `Course: ${options.courseName}`
       : 'Course: whatever the room is playing';
+    // the picker below already says which course; don't say it twice
+    if (options.courses?.length) this.#courseLine.style.display = 'none';
     this.#card.append(this.#courseLine);
     this.#card.append(this.#form, this.#room, this.#status);
     this.element.append(this.#card);
@@ -212,6 +252,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
       room: this.#inputs.room.value.trim(),
       server: this.#inputs.server.value.trim(),
       secret: this.#inputs.secret.value,
+      courseUrl: this.#courseSelect?.value,
     };
   }
 
@@ -283,6 +324,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
 
   #setFormEnabled(enabled: boolean) {
     this.#joinButton.disabled = !enabled;
+    if (this.#courseSelect) this.#courseSelect.disabled = !enabled;
     for (const input of Object.values(this.#inputs)) input.disabled = !enabled;
   }
 

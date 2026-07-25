@@ -26,10 +26,45 @@ const desktopProxy = {
  * our root is `examples/`, so strip that prefix. With OGS_DIAG=1 every game it
  * launches redirects to the diagnostics page instead — that's the spike.
  */
+/**
+ * OGS Desktop builds its library from `${app_url}/api/courses/home`, which we
+ * proxy — so we can hand it one extra tile. "Multiplayer" launches our lobby
+ * entry page with no course attached; the lobby picks the course itself, which
+ * is why this entry deliberately has no `courseUrl`.
+ *
+ * This is the only way in: Desktop is closed source, so the library can't be
+ * extended from inside. It costs nothing when OGS_APP_URL isn't pointed here.
+ */
+const MULTIPLAYER_TILE = {
+  title: 'Multiplayer',
+  description: 'Play a round with a friend — pick the course in the lobby',
+  url: '/fuse/examples/multiplayer/index.html',
+  gameMode: 2,
+  engine: 2,
+  posterUrl: 'https://coursedata.opengolfsim.com/webgl/courses/mountain-vista/v1/mountain-vista-poster.jpg',
+  slug: 'fuse_multiplayer',
+  gameEngine: 'webgl',
+};
+
+async function serveLibraryWithMultiplayer(req, res) {
+  const upstream = new URL(req.url, 'https://app.opengolfsim.com');
+  const response = await fetch(upstream, { headers: { accept: 'application/json' } });
+  const body = await response.json();
+  body.courses = [MULTIPLAYER_TILE, ...(body.courses ?? [])];
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
 function desktopCompat(server) {
   const diagnostics = process.env.OGS_DIAG === '1';
   server.middlewares.use((req, res, next) => {
     if (!req.url) return next();
+
+    // Add our tile to the library on its way through. Everything else under
+    // /api is proxied untouched.
+    if (req.url.startsWith('/api/courses/home')) {
+      return serveLibraryWithMultiplayer(req, res).catch(() => next());
+    }
     if (req.url.startsWith('/fuse/examples/')) {
       req.url = req.url.slice('/fuse/examples'.length);
     } else if (req.url.startsWith('/fuse/')) {
@@ -102,6 +137,7 @@ export default defineConfig({
         courses: path.resolve(import.meta.dirname, 'examples/courses/index.html'),
         cornhole: path.resolve(import.meta.dirname, 'examples/cornhole/index.html'),
         diagnostics: path.resolve(import.meta.dirname, 'examples/diagnostics/index.html'),
+        multiplayer: path.resolve(import.meta.dirname, 'examples/multiplayer/index.html'),
       },
     },
   },
