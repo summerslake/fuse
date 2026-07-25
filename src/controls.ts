@@ -68,8 +68,22 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
     }
     this.#lastTap = currentTime;
   }
-  
+
+  /** True when the event came from somewhere the user is entering text. */
+  #isTyping(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
+    const tag = target.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  }
+
   #keyHandler(event: KeyboardEvent) {
+    // Typing in a field is not gameplay. These listeners are on window in the
+    // capture phase, so without this, entering "real1" in a text input fires a
+    // test shot on the 1 — and any single letter would toggle stats, take a
+    // mulligan or go fullscreen.
+    if (this.#isTyping(event.target)) return;
+
     const pressed = event.type === 'keydown';
     let handled = false;
     if (pressed) {

@@ -192,6 +192,11 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     }
   }
 
+  /** True while the full-screen lobby is covering the game. */
+  get isOpen(): boolean {
+    return this.element.classList.contains(styles.lobbyOpen);
+  }
+
   /** Current form values — handy for auto-joining from query params. */
   get values(): UILobbyJoinParams {
     return {

@@ -111,6 +111,13 @@ const defaultCloudColor = 'rgb(255, 255, 255)';
 function launchShot(shot: OpenGolfSim.Shot) {
   if (!gameContext.golfBall) return;
 
+  // The lobby covers a round we're about to abandon — a swing while it's up
+  // shouldn't be played into that round behind it.
+  if (gameContext.lobby?.isOpen) {
+    console.log('[net] lobby is open — shot ignored');
+    return;
+  }
+
   // Multiplayer: block input when it isn't one of our players' turn.
   if (gameContext.net && gameContext.game && !gameContext.game.isLocalTurn) {
     console.log('[net] not your turn — shot ignored');
