@@ -18,6 +18,12 @@ export interface UILobbyJoinParams {
    * "whatever the room is already playing" — the relay hands it back on join.
    */
   courseUrl?: string;
+  /**
+   * Graphics quality (0 low, 1 medium, 2 high). Purely local — each player
+   * renders on their own machine, and a remote player's laptop is usually not
+   * the one the host tuned for.
+   */
+  quality?: number;
 }
 
 /** A course offered in the lobby picker. */
@@ -44,6 +50,8 @@ export interface UILobbyOptions {
    * no course attached. Whoever opens the room decides; everyone else inherits.
    */
   courses?: UILobbyCourse[];
+  /** Where the graphics picker starts — usually whatever the host app asked for. */
+  defaultQuality?: number;
 }
 
 interface UILobbyEvents {
@@ -74,6 +82,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #roomTitle: HTMLElement;
   #courseLine: HTMLElement;
   #courseSelect?: HTMLSelectElement;
+  #qualitySelect?: HTMLSelectElement;
   #playingLabel = '';
   #startButton: HTMLButtonElement;
   #joinButton: HTMLButtonElement;
@@ -135,6 +144,32 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
       }));
       wrapper.append(label, this.#courseSelect);
       this.#form.prepend(wrapper);
+    }
+
+    // Graphics is a local choice, so it sits with the other join settings rather
+    // than anywhere shared: the host's machine and a remote player's laptop are
+    // rarely comparable, and the host app asks for High regardless.
+    {
+      const wrapper = document.createElement('div');
+      wrapper.className = styles.lobbyField;
+      const label = document.createElement('label');
+      label.className = styles.lobbyLabel;
+      label.textContent = 'Graphics (this machine only)';
+      this.#qualitySelect = document.createElement('select');
+      this.#qualitySelect.className = styles.lobbyInput;
+      this.#qualitySelect.append(...[
+        { value: '0', text: 'Low — best frame rate' },
+        { value: '1', text: 'Medium' },
+        { value: '2', text: 'High' },
+      ].map(({ value, text }) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        return option;
+      }));
+      this.#qualitySelect.value = String(options.defaultQuality ?? 1);
+      wrapper.append(label, this.#qualitySelect);
+      this.#form.append(wrapper);
     }
 
     if (hostPlayers.length) {
@@ -254,6 +289,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
       server: this.#inputs.server.value.trim(),
       secret: this.#inputs.secret.value,
       courseUrl: this.#courseSelect?.value,
+      quality: this.#qualitySelect ? Number(this.#qualitySelect.value) : undefined,
     };
   }
 
@@ -339,6 +375,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #setFormEnabled(enabled: boolean) {
     this.#joinButton.disabled = !enabled;
     if (this.#courseSelect) this.#courseSelect.disabled = !enabled;
+    if (this.#qualitySelect) this.#qualitySelect.disabled = !enabled;
     for (const input of Object.values(this.#inputs)) input.disabled = !enabled;
   }
 

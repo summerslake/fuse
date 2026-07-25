@@ -825,8 +825,8 @@ function defaultRelayHost(): string {
 /** Remember the last name/room/server so rejoining is one click. */
 function rememberLobby(values: UILobbyJoinParams) {
   try {
-    const { name, room, server } = values; // never persist the secret
-    localStorage.setItem(LOBBY_STORAGE_KEY, JSON.stringify({ name, room, server }));
+    const { name, room, server, quality } = values; // never persist the secret
+    localStorage.setItem(LOBBY_STORAGE_KEY, JSON.stringify({ name, room, server, quality }));
   } catch { /* private mode — prefills just won't stick */ }
 }
 function recallLobby(): Partial<UILobbyJoinParams> {
@@ -880,6 +880,9 @@ function openLobby(
     courseName: courseUrl.split('/').pop(),
     hostPlayers,
     courses,
+    // last choice on this machine wins over whatever the host app asked for —
+    // OGS Desktop sends High to everyone, including laptops that can't hold it
+    defaultQuality: saved.quality ?? gameContext.setupData?.qualityLevel ?? QualityMode.Medium,
     defaults: {
       name: resume?.name || params.get('name') || saved.name || '',
       room: resume?.room || params.get('room') || saved.room || '',
@@ -929,6 +932,13 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   const course = values.courseUrl || courseUrl;
   if (course) {
     gameContext.gameData = { ...(gameContext.gameData ?? { id: 'mp', gameMode: 2 }), courseUrl: course };
+  }
+
+  // Rendering is local, so this is ours to set regardless of what the host app
+  // asked for. Applied before preLoad, which is where the renderer is built.
+  if (typeof values.quality === 'number' && gameContext.setupData) {
+    gameContext.setupData.qualityLevel = values.quality;
+    gameContext.qualityLevel = values.quality;
   }
 
   // A host app already sent us real players with real club distances — keep them
