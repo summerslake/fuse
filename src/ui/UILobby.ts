@@ -74,6 +74,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #roomTitle: HTMLElement;
   #courseLine: HTMLElement;
   #courseSelect?: HTMLSelectElement;
+  #playingLabel = '';
   #startButton: HTMLButtonElement;
   #joinButton: HTMLButtonElement;
   #hostPlayers: string[];
@@ -310,8 +311,21 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   /** The round is under way: drop the overlay, leave a way out in the corner. */
   setPlaying(roomCode: string, playerCount: number) {
     this.#showOverlay(false);
-    this.#pillLabel.textContent = `Room ${roomCode} · ${playerCount} players`;
+    this.#playingLabel = `Room ${roomCode} · ${playerCount} players`;
+    this.#pillLabel.textContent = this.#playingLabel;
     this.#pill.classList.add(styles.lobbyPillOpen);
+  }
+
+  /**
+   * Say so in the corner while the socket is down mid-round. It reconnects by
+   * itself, but a silent stall during someone else's turn is indistinguishable
+   * from them just taking their time.
+   */
+  setReconnecting(reconnecting: boolean) {
+    if (!this.#playingLabel) return;
+    this.#pillLabel.textContent = reconnecting
+      ? `${this.#playingLabel} · reconnecting…`
+      : this.#playingLabel;
   }
 
   #emitJoin() {

@@ -17,6 +17,28 @@ export interface NetClientJoinParams {
   roomSecret?: string;
   courseUrl: string;
   players: OpenGolfSim.Player[];
+  /**
+   * Stable identity across reconnects. Defaults to a value persisted in
+   * localStorage, so a reconnect (or a reload) reclaims this client's slot and
+   * its player ids instead of arriving as a stranger.
+   */
+  clientKey?: string;
+}
+
+const CLIENT_KEY_STORAGE = 'ogs.net.clientKey';
+
+/** This browser's stable client key, generated once and remembered. */
+function persistentClientKey(): string {
+  try {
+    const existing = localStorage.getItem(CLIENT_KEY_STORAGE);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    localStorage.setItem(CLIENT_KEY_STORAGE, created);
+    return created;
+  } catch {
+    // private mode: a per-session key still survives reconnects, just not reloads
+    return crypto.randomUUID();
+  }
 }
 
 interface NetClientEvents {
@@ -44,6 +66,9 @@ interface NetClientEvents {
 export class NetClient extends EventEmitter<NetClientEvents> {
   url: string;
   clientId?: string;
+  /** Shots applied so far — what the relay replays from after a reconnect. */
+  shotsSeen = 0;
+  readonly clientKey: string;
   #join: NetClientJoinParams;
   #ws?: WebSocket;
   #closedByUser = false;
@@ -55,6 +80,7 @@ export class NetClient extends EventEmitter<NetClientEvents> {
     super();
     this.url = url;
     this.#join = join;
+    this.clientKey = join.clientKey ?? persistentClientKey();
   }
 
   connect() {
@@ -71,6 +97,8 @@ export class NetClient extends EventEmitter<NetClientEvents> {
         roomSecret: this.#join.roomSecret ?? '',
         courseUrl: this.#join.courseUrl,
         players: this.#join.players,
+        clientKey: this.clientKey,
+        sinceShot: this.shotsSeen,
       });
       this.emit('open');
     });
@@ -102,6 +130,9 @@ export class NetClient extends EventEmitter<NetClientEvents> {
         this.emit('roster', msg);
         break;
       case 'shot':
+        // counted, not just forwarded: this is the resume point the relay
+        // replays from, so it has to track what we've actually been handed
+        this.shotsSeen++;
         this.emit('shot', msg);
         break;
       case 'launch':

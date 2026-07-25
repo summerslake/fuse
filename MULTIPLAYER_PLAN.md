@@ -166,14 +166,22 @@ real round on the Square. Everything below is toward that.
    standalone relay (`npm run server`, set `OGS_MP_SECRET`), port-forward its
    port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
    end-to-end. (The in-process vite relay is dev-only.)
-3. **Phase 5 — robustness.** Disconnect/rejoin so the roster survives a client
-   dropping mid-round — note the lobby now *rejects* a join to a started room, so
-   a network blip currently ends that client's round (needs a stable client key
-   the room can match a returning player against); live roster changes after
-   start are still ignored (mid-round the other clients keep playing the frozen
-   roster, including the leaver's players); pre-load race (a shot that arrives
-   before a client finishes loading the GLB can be missed — GameSync is created
-   after load); an in-game "waiting for Brett…" indicator.
+3. **Phase 5 — robustness.**
+   - ✅ ~~Disconnect/rejoin~~ — done 2026-07-25 (protocol v4). `NetClient` keeps a
+     `clientKey` in localStorage; a returning client reclaims the same
+     `clientId`, the same namespaced player ids and its roster entries, so every
+     other client's game stays valid. Mid-round the roster is frozen on drop
+     (in the lobby it still shrinks); the room survives 5 minutes with nobody
+     connected; and the relay keeps a `shotLog` and replays whatever the
+     returning client missed, so its scorecard and turn order catch up instead
+     of silently diverging. The corner pill says "reconnecting…" meanwhile.
+     **Still open:** a client that *reloads* mid-round rejoins the room but has
+     lost its in-memory `CourseGame` — the replay rebuilds scoring only from the
+     shots it receives, and it never saw the earlier ones. Needs a state
+     snapshot on resume, or replaying the whole `shotLog` into a fresh game.
+   - Pre-load race: a shot arriving before a client finishes loading the GLB can
+     be missed — GameSync is created after load.
+   - An in-game "waiting for Brett…" indicator.
 4. ✅ ~~**Tidy-up** of the dead server turn machinery~~ — done 2026-07-25 with
    the lobby work (protocol v3).
 4b. **Multiplayer on the practice range** (asked for 2026-07-25; parked until one

@@ -145,6 +145,60 @@ describe('relay ↔ NetClient', () => {
     expect(c2GotShot).toBe(false);
   });
 
+  it('a returning client reclaims its slot, player ids and missed shots', async () => {
+    const port = await startRelay();
+    const { c1, c2, id1, id2 } = await joinTwo(port);
+    const key = c2.clientKey;
+
+    const started = once(c1, 'started');
+    c1.sendStart();
+    await started;
+
+    // c2 drops mid-round
+    c2.close();
+    await new Promise((r) => setTimeout(r, 100));
+
+    // the round carries on without them
+    c1.sendShotResult(id1, { endPosition: [0, 0, 30], isHoled: false } as any);
+    await once(c1, 'shot');
+
+    // ...and they come back with the same key, having seen no shots
+    const back = makeClient(port, {
+      roomCode: 'garage', courseUrl: 'course.glb', players: playersFor('B'), clientKey: key,
+    });
+    const rejoined = once(back, 'joined');
+    const replayed = once(back, 'shot');
+    back.connect();
+
+    const joined = await rejoined;
+    expect(joined.resumed).toBe(true);
+    // same identity: the other client's game is built around these exact ids
+    expect(joined.clientId).toBe(id2.split(':')[0]);
+    expect(joined.room.roster.map((p: any) => p.id).sort()).toEqual([id1, id2].sort());
+
+    // and the shot taken while they were away is replayed
+    const missed = await replayed;
+    expect(missed.playerId).toBe(id1);
+    expect(missed.result.endPosition).toEqual([0, 0, 30]);
+  });
+
+  it('keeps a dropped player in the roster mid-round, but not in the lobby', async () => {
+    const port = await startRelay();
+    const { c1, c2 } = await joinTwo(port, 'lobbyroom');
+    const shrunk = waitForRoster(c1, 1);
+    c2.close();
+    expect((await shrunk).roster).toHaveLength(1); // lobby: they're gone
+
+    const { c1: d1, c2: d2 } = await joinTwo(port, 'playingroom');
+    const started = once(d1, 'started');
+    d1.sendStart();
+    await started;
+    const rosterAfterDrop = once(d1, 'roster');
+    d2.close();
+    // mid-round the roster is frozen — every client's game depends on it
+    expect((await rosterAfterDrop).roster).toHaveLength(2);
+  });
+
   it('updates the roster when a client leaves', async () => {
     const port = await startRelay();
     const { c1, c2 } = await joinTwo(port);

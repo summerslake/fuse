@@ -5,7 +5,7 @@
  * Keep PROTOCOL_VERSION in sync with server/relay.js.
  */
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** A roster player as the server tracks it: a Player with a namespaced id + owner. */
 export interface RosterPlayer {
@@ -60,6 +60,19 @@ export interface JoinMessage {
   roomSecret: string;
   courseUrl: string;
   players: OpenGolfSim.Player[];
+  /**
+   * Stable per-client identity, kept across reconnects. A returning client
+   * reclaims its old clientId and its roster entries — which matters because
+   * player ids are namespaced by clientId and every client's game was built
+   * around them. Without it, a dropped connection is the end of the round.
+   */
+  clientKey: string;
+  /**
+   * How many shots this client has already applied. On a resume the relay
+   * replays everything after this, so a client that missed shots while offline
+   * catches up instead of silently diverging.
+   */
+  sinceShot?: number;
 }
 export interface ShotResultMessage {
   type: 'shot_result';
@@ -91,6 +104,8 @@ export interface JoinedMessage {
   type: 'joined';
   clientId: string;
   room: RoomSnapshot;
+  /** true when this reclaimed an existing slot rather than taking a new one */
+  resumed?: boolean;
 }
 export interface RosterMessage {
   type: 'roster';

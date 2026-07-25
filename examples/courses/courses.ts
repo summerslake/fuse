@@ -956,7 +956,8 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   net.on('open', () => console.log('[net] connected, joining room', values.room));
   net.on('joined', (m) => {
     gameContext.clientId = m.clientId;
-    console.log('[net] joined as', m.clientId);
+    console.log(`[net] ${m.resumed ? 'resumed' : 'joined'} as`, m.clientId);
+    if (m.resumed) lobby?.setReconnecting(false);
     // Joined without naming a course: play whatever the room is playing. Saves
     // the other players from having to pass around an exact GLB url.
     if (!course && m.room?.courseUrl) {
@@ -971,7 +972,10 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   });
   net.on('close', () => {
     console.log('[net] disconnected');
-    if (!gameContext.roundStarted) lobby?.setError('Disconnected from the relay.');
+    // Mid-round this is recoverable: NetClient reconnects and the relay hands
+    // back the same slot plus any shots missed. Just say so in the corner.
+    if (gameContext.roundStarted) lobby?.setReconnecting(true);
+    else lobby?.setError('Disconnected from the relay.');
   });
 
   net.on('roster', (m) => {

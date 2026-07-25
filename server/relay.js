@@ -6,10 +6,12 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CLIENTS_PER_ROOM = 8;
+/** How long a started room keeps everyone's slots after the last one drops. */
+const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Create (but don't own the lifecycle beyond close) a relay server. Importable
@@ -124,13 +126,39 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
       });
       return;
     }
+    // Coming back to a room we already have a slot in — a dropped connection, a
+    // reload, a laptop that slept. Reclaim the same clientId and roster entries
+    // rather than appearing as a second player.
+    const existing = room.findByKey(msg.clientKey);
+    if (existing) {
+      clearTimeout(room.cleanupTimer); // someone came back
+      conn.clientId = existing.clientId;
+      conn.roomCode = msg.roomCode;
+      conn.joined = true;
+      room.resumeClient(existing.clientId, socket);
+
+      send(socket, {
+        type: 'joined',
+        clientId: existing.clientId,
+        room: room.snapshot(),
+        resumed: true,
+      });
+      // Replay the shots taken while they were away, in order, so their game
+      // catches up instead of quietly diverging from everyone else's.
+      const missed = room.shotLog.slice(Number(msg.sinceShot) || 0);
+      for (const shot of missed) send(socket, shot);
+      room.broadcast(room.rosterMessage());
+      return;
+    }
+
     if (room.clients.size >= MAX_CLIENTS_PER_ROOM) {
       send(socket, { type: 'error', message: 'room is full' });
       return;
     }
     if (room.started) {
       // The roster is baked into every client's CourseGame once play begins, so
-      // a late joiner can't be added. (Rejoining after a dropout is Phase 5.)
+      // a genuinely new player can't be added mid-round. Returning players are
+      // handled above, by key.
       send(socket, { type: 'error', message: 'that round has already started' });
       return;
     }
@@ -139,7 +167,7 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
     conn.clientId = clientId;
     conn.roomCode = msg.roomCode;
     conn.joined = true;
-    room.addClient(clientId, socket, msg.players);
+    room.addClient(clientId, socket, msg.players, msg.clientKey);
 
     send(socket, { type: 'joined', clientId, room: room.snapshot() });
     room.broadcast(room.rosterMessage());
@@ -150,8 +178,20 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
     const room = rooms.get(conn.roomCode);
     if (!room) return;
     room.removeClient(conn.clientId);
-    if (room.clients.size === 0) {
-      rooms.delete(conn.roomCode);
+
+    if (room.liveClientCount === 0) {
+      // Nobody is connected. In the lobby that's just an empty room — drop it.
+      // Mid-round it usually means a shared connection blipped and everyone is
+      // about to come back, so hold the slots for a while before giving up.
+      if (!room.started) {
+        rooms.delete(conn.roomCode);
+        return;
+      }
+      clearTimeout(room.cleanupTimer);
+      room.cleanupTimer = setTimeout(() => {
+        if (room.liveClientCount === 0) rooms.delete(conn.roomCode);
+      }, EMPTY_ROOM_TTL_MS);
+      room.cleanupTimer.unref?.(); // never hold the process open for this
       return;
     }
     room.broadcast(room.rosterMessage());
