@@ -106,6 +106,23 @@ document.addEventListener('securitypolicyviolation', (event) => {
   }
 });
 
+// AppBridge calls `rapier.init()` with no catch, so a WASM failure surfaces only
+// as an unhandled rejection — with no console in Desktop, that would be invisible.
+const errorRow = row(env, 'Uncaught errors', 'none so far');
+window.addEventListener('error', (event) =>
+  setRow(errorRow, `${event.message} (${event.filename}:${event.lineno})`, 'fail'));
+window.addEventListener('unhandledrejection', (event) =>
+  setRow(errorRow, `unhandled rejection: ${event.reason}`, 'fail'));
+
+// Compile the 8-byte empty module: an instant, decisive answer on whether WASM
+// is permitted at all, independent of whatever Rapier is doing.
+try {
+  new WebAssembly.Module(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]));
+  row(env, 'WASM compile', 'allowed', 'pass');
+} catch (err) {
+  row(env, 'WASM compile', `refused: ${err}`, 'fail');
+}
+
 // An https page has its ws:// blocked as mixed content — the relay would need TLS.
 if (httpsPage) {
   row(env, 'Note', 'This page is https, so the browser will block ws:// as mixed content. If the relay test fails, that is why — the relay needs TLS (wss://), or Desktop needs to load us over http.');

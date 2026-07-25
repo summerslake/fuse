@@ -112,9 +112,15 @@ export default defineConfig({
               '\n'
           );
         } catch (err) {
-          console.warn(
-            `    ⚠  multiplayer relay not started (run \`npm install\` in server/): ${err.message}\n`
-          );
+          // Be specific: a config edit restarts vite while the old process still
+          // holds the port, and the relay then silently isn't there — which looks
+          // exactly like a blocked WebSocket from the client side.
+          const hint =
+            err.code === 'EADDRINUSE'
+              ? `port ${port} is already in use — another dev server or relay is still running.\n` +
+                `       Multiplayer will NOT work until that is freed:  lsof -nP -iTCP:${port} -sTCP:LISTEN`
+              : `${err.message} (if this is a missing module, run \`npm install\` in server/)`;
+          console.warn(`\n    ⚠  MULTIPLAYER RELAY NOT STARTED — ${hint}\n`);
         }
       },
     },
