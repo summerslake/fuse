@@ -813,6 +813,15 @@ async function initializeDebug() {
 
 const LOBBY_STORAGE_KEY = 'ogs.lobby';
 
+/**
+ * Where the relay probably is: alongside whoever served this page. The host
+ * plays from localhost and gets localhost; a remote player loading the host's
+ * build over the internet gets the host's address, so there's nothing to type.
+ */
+function defaultRelayHost(): string {
+  return `${window.location.hostname || 'localhost'}:8080`;
+}
+
 /** Remember the last name/room/server so rejoining is one click. */
 function rememberLobby(values: UILobbyJoinParams) {
   try {
@@ -874,7 +883,7 @@ function openLobby(
     defaults: {
       name: resume?.name || params.get('name') || saved.name || '',
       room: resume?.room || params.get('room') || saved.room || '',
-      server: resume?.server || params.get('server') || saved.server || 'localhost:8080',
+      server: resume?.server || params.get('server') || saved.server || defaultRelayHost(),
       secret: resume?.secret || params.get('secret') || '',
     },
   });
