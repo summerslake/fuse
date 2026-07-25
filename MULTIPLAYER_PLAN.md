@@ -671,8 +671,23 @@ Only the user can run this (GUI + hardware). **Tooling for it now exists** — s
 
 ```bash
 OGS_DIAG=1 npm run dev          # serves the diagnostics page for any game Desktop launches
-OGS_APP_URL=http://localhost:5173 open -a "OpenGolfSim Desktop"
+open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
 ```
+
+**Two launch gotchas, both measured 2026-07-25:**
+- `open -a` alone does NOT pass the shell environment (LaunchServices), so the
+  override is silently ignored — use `open --env`.
+- Running the binary directly (`.../Contents/MacOS/OpenGolfSim`) *does* get the
+  env var, but loses the app bundle's TCC grants: the Square plugin then fails
+  with `Timeout waiting for Noble to be powered on` and never connects over
+  Bluetooth. `open --env` keeps bundle identity, so both work.
+
+**`app_url` is not just fuse — it's the whole API.** `config()` derives
+`api_url = ${app_url}/api`, so overriding it also repoints sign-in, the course
+library, the store, plugins and analytics. Measured result: every one 404s
+against the dev server, Desktop drops to "offline mode" and the library shows
+"No courses available". `vite.config.examples.js` now proxies `^/api/` through to
+`https://app.opengolfsim.com` so only `/fuse/**` is served locally.
 
 then launch any fuse game from the Desktop library and read the screen. It reports
 `app.appType`, the embedding, the page protocol, whether Rapier's WASM initialized,

@@ -11,6 +11,21 @@ export default defineConfig({
       '@': path.resolve(import.meta.dirname, 'src'),
     },
   },
+  server: {
+    proxy: {
+      /**
+       * OGS Desktop derives its entire API base from `app_url`
+       * (`api_url = ${app_url}/api`), so pointing OGS_APP_URL at this dev server
+       * also repoints sign-in, the course library, the store and analytics —
+       * which we don't serve, leaving Desktop offline with an empty library.
+       * Pass all of that through to the real server; only `/fuse/**` is ours.
+       */
+      '^/api/': {
+        target: 'https://app.opengolfsim.com',
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     sourcemap: true,
     outDir: path.resolve(import.meta.dirname, 'dist/examples'),
@@ -34,10 +49,11 @@ export default defineConfig({
         server.printUrls = () => {
           console.log('\n    FUSE Examples running\n');
           _print();
-          // NB: `open -a` goes through LaunchServices and does NOT pass env
-          // vars to the app — the binary has to be launched directly.
+          // NB: use `open --env`, not a direct binary launch — running the
+          // executable from a terminal loses the bundle's TCC grants, and the
+          // Square plugin then can't reach Bluetooth ("Noble powered on" timeout).
           console.log(
-            `    OGS Desktop:  OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} "/Applications/OpenGolfSim.app/Contents/MacOS/OpenGolfSim"` +
+            `    OGS Desktop:  open --env OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} -a "/Applications/OpenGolfSim.app"` +
               (process.env.OGS_DIAG === '1'
                 ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page\n'
                 : '\n    (set OGS_DIAG=1 to serve the diagnostics page instead of the game)\n')
