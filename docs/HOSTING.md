@@ -14,7 +14,7 @@ written for them and assumes nothing.
 ```
 □ 1.  npm run host                    (builds, serves, starts the relay)
 □ 2.  see a "Network:" line           (if not, nothing outside this machine can connect)
-□ 3.  get your address                LAN: ipconfig getifaddr en0
+□ 3.  note the address                LAN: the "Network:" line above (that IS your LAN IP)
                                       internet: curl -s ifconfig.me  + forward 5173 and 8080
 □ 4.  quit OpenGolfSim completely     pkill -x OpenGolfSim
 □ 5.  open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
@@ -78,11 +78,18 @@ you and your guest are on the same wifi.
 
 ## 2. Find the address to give your guest
 
-**Same network (LAN)** — nothing to forward:
+**Same network (LAN)** — nothing to forward. It's the `Network:` line the server
+already printed; that's your LAN address, not a public one. If several are listed
+(wifi plus ethernet, a VPN, Tailscale, Docker), use the one on the same subnet as
+the other device — usually `192.168.x.x` or `10.x.x.x`.
+
+Same value, if you'd rather ask directly:
 
 ```bash
 ipconfig getifaddr en0     # wifi; try en1 or en6 if empty
 ```
+
+It changes with the network you're on, so read it fresh each session.
 
 **Over the internet:**
 
