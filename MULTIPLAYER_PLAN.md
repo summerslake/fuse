@@ -1,6 +1,18 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅ **Honors + course map shows every ball** (2026-07-25). Two play-feel fixes
+  from live testing:
+  1. **Honors.** The next tee went to roster order, so Lake teed off first after
+     an 8 to Brett's 4. Now `CourseGame` keeps a `#honors` list, recomputed from
+     the finished hole's scores (low first, ties keep their order), and
+     `#findAwayPlayer` uses it to break distance ties — which in practice means
+     the tee, where every lie is the same point. Still fully deterministic from
+     the scorecards, so networked clients agree with no server involvement.
+  2. **Course map.** The ball dot was pinned to the lie, so it never moved in
+     flight; it now tracks the live ball. The map also plots every player still
+     on the hole (active white, others blue with a name chip; off-frame balls
+     pinned to the edge and dimmed).
 - ✅ **Lobby (join/leave) + dead turn machinery deleted** (2026-07-25,
   browser-verified). `UILobby` (`src/ui/UILobby.ts`) is the multiplayer front
   door: name(s), room code, relay address, optional secret → live roster → any

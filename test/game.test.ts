@@ -124,7 +124,7 @@ describe('CourseGame — shot-by-shot away rotation', () => {
     expect(p2.scorecard.get('1')).toBe(4);           // 1 (tee) + 1 (green) + auto-putt 2
     expect(p2.toPar).toBe(1);
     expect(g.activeHole.number).toBe('2');           // advanced hole
-    expect(g.activePlayer.id).toBe('p1');            // honors back to roster order on the tee
+    expect(g.activePlayer.id).toBe('p1');            // p1 scored 3 to p2's 4 -> honors
     expect(player(g, 'p1').disabled).toBe(false);
     expect(p2.disabled).toBe(false);
   });
@@ -143,6 +143,52 @@ describe('CourseGame — shot-by-shot away rotation', () => {
     expect(ended).toBe(false);                        // p2 still to play
     play(g, green(199));                              // p2 finishes hole 2 -> round over
     expect(ended).toBe(true);
+  });
+});
+
+describe('CourseGame — honors off the tee', () => {
+  const holeOut = { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true };
+
+  /** Walk hole 1 so p1 scores `p1Strokes` and p2 scores `p2Strokes`. */
+  function playHoleOne(g: CourseGame, p1Strokes: number, p2Strokes: number) {
+    // p1 has the opening tee (roster order). He keeps hitting it behind the tee
+    // — 160 out to p2's 150 — so he stays away and holds the turn while we run
+    // his score up, then holes out with his last stroke.
+    for (let i = 0; i < p1Strokes - 1; i++) {
+      expect(g.activePlayer.id).toBe('p1');
+      g.applyShotResult('p1', fairway(-10));
+    }
+    g.applyShotResult('p1', holeOut);
+
+    // p1 is done, so p2 is the only player left on the hole and keeps the turn
+    for (let i = 0; i < p2Strokes - 1; i++) {
+      expect(g.activePlayer.id).toBe('p2');
+      g.applyShotResult('p2', fairway(10));
+    }
+    g.applyShotResult('p2', holeOut);
+  }
+
+  it('gives the next tee to the low score on the previous hole, not roster order', () => {
+    const g = makeGame();
+    playHoleOne(g, 8, 4);                             // p1 blows up, p2 scores 4
+    expect(player(g, 'p1').scorecard.get('1')).toBe(8);
+    expect(player(g, 'p2').scorecard.get('1')).toBe(4);
+    expect(g.activeHole.number).toBe('2');
+    expect(g.activePlayer.id).toBe('p2');            // p2 has honors
+  });
+
+  it('keeps the previous order when scores tie', () => {
+    const g = makeGame();
+    playHoleOne(g, 4, 4);
+    expect(g.activePlayer.id).toBe('p1');            // tie -> p1 keeps the tee
+  });
+
+  it('honors only breaks ties — the away player still plays first once lies differ', () => {
+    const g = makeGame();
+    playHoleOne(g, 8, 4);
+    expect(g.activePlayer.id).toBe('p2');            // hole 2, p2 has honors
+    play(g, fairway(60));                             // p2 -> 140 from the pin (z=200)
+    expect(g.activePlayer.id).toBe('p1');            // p1 still on the tee (200) -> away
   });
 });
 

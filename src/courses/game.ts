@@ -72,6 +72,12 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
   /** Multiplayer mode. See CourseGameOptions.networked. */
   networked: boolean;
   #orderedHoles: Hole[];
+  /**
+   * Honors: player ids in the order they earned the tee, best score on the last
+   * hole first. Used to break "away" ties — chiefly on the tee, where every lie
+   * is the same point. Starts as roster order.
+   */
+  #honors: string[];
   // #playerData: Map<string, PlayerState>;
 
   constructor(course: CourseLoader, golfBall: GolfBall, options: CourseGameOptions) {
@@ -89,6 +95,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
     this.currentPlayerIndex = 0;
     this.currentHoleIndex = 0;
+    this.#honors = this.players.map(p => p.id);
     this.#orderedHoles = Array.from(this.course.holes.values()).map(h => ({ ...h, _num: parseInt(h.number) })).sort((a, b) => (a._num < b._num ? -1 : 1));
     if (!this.#orderedHoles.length) {
       throw new Error('Course has no holes!');
@@ -206,8 +213,9 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
    *
    * Turn model: **shot-by-shot, "away" plays next.** After every shot the turn
    * passes to the player whose ball lies farthest from the pin among those who
-   * haven't holed out. When everyone has holed out, advance to the next hole
-   * (honors = roster order off the tee, where all lies are equal). This is fully
+   * haven't holed out. When everyone has holed out, advance to the next hole,
+   * where all lies are equal and the tie goes to honors — the low score on the
+   * hole just played (roster order on the first tee). This is fully
    * deterministic from the shot data + course, so every networked client
    * computes the identical turn without any server arbitration.
    *
@@ -299,6 +307,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       console.log('Course finished!');
       return false;
     }
+    this.#updateHonors(this.activeHole.number);
     this.currentHoleIndex = next;
     this.activeHole = this.#orderedHoles[this.currentHoleIndex];
     this._setupHole();
@@ -306,20 +315,37 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
   }
 
   /**
+   * Recompute honors from the hole just played: lowest score tees off first.
+   * Players who tie keep the order they already had (a stable sort), which is
+   * how honors actually carry over. Anyone without a score for that hole goes
+   * last. Deterministic from the scorecards, so every client agrees.
+   */
+  #updateHonors(holeNumber: string) {
+    const scoreOf = (id: string) =>
+      this.players.find(p => p.id === id)?.scorecard.get(holeNumber) ?? Infinity;
+    this.#honors = [...this.#honors].sort((a, b) => scoreOf(a) - scoreOf(b));
+  }
+
+  /**
    * Index of the player who is "away" — farthest from the pin among those who
-   * haven't holed out. Ties (e.g. everyone on the tee) resolve to the earliest
-   * roster position via the strict `>`, so honors == roster order off the tee.
-   * Deterministic across clients: identical lies + pin -> identical result.
+   * haven't holed out. Ties (e.g. everyone on the tee, where all lies are the
+   * same point) go to whoever has honors — the low score on the previous hole.
+   * Deterministic across clients: identical lies + pin + scorecards -> identical
+   * result, which is what keeps networked turn order in sync without a server.
    */
   #findAwayPlayer(): number {
     let bestIndex = 0;
     let bestDist = -Infinity;
+    let bestHonors = Infinity;
     this.players.forEach((player, index) => {
       if (player.disabled) return; // holed out this hole
       const pin = player.pin;
       const dist = pin ? player.start.distanceTo(pin) : 0;
-      if (dist > bestDist) {
+      const honorsIndex = this.#honors.indexOf(player.id);
+      const honors = honorsIndex === -1 ? Number.MAX_SAFE_INTEGER : honorsIndex;
+      if (dist > bestDist || (dist === bestDist && honors < bestHonors)) {
         bestDist = dist;
+        bestHonors = honors;
         bestIndex = index;
       }
     });
