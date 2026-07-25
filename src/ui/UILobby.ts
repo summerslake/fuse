@@ -55,6 +55,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #pill: HTMLElement;
   #pillLabel: HTMLElement;
   #roomTitle: HTMLElement;
+  #courseLine: HTMLElement;
   #startButton: HTMLButtonElement;
   #joinButton: HTMLButtonElement;
   #hostPlayers: string[];
@@ -147,12 +148,12 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     this.#status.className = styles.lobbyStatus;
 
     this.#card.append(title);
-    if (options.courseName) {
-      const course = document.createElement('div');
-      course.className = styles.lobbyStatus;
-      course.textContent = `Course: ${options.courseName}`;
-      this.#card.append(course);
-    }
+    this.#courseLine = document.createElement('div');
+    this.#courseLine.className = styles.lobbyStatus;
+    this.#courseLine.textContent = options.courseName
+      ? `Course: ${options.courseName}`
+      : 'Course: whatever the room is playing';
+    this.#card.append(this.#courseLine);
     this.#card.append(this.#form, this.#room, this.#status);
     this.element.append(this.#card);
 
@@ -190,6 +191,11 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
       const value = defaults[key];
       if (value !== undefined) this.#inputs[key].value = value;
     }
+  }
+
+  /** Name the course once it's known — a joiner learns it from the room. */
+  setCourseName(name: string) {
+    if (this.#courseLine) this.#courseLine.textContent = `Course: ${name}`;
   }
 
   /** True while the full-screen lobby is covering the game. */

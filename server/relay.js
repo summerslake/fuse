@@ -106,7 +106,16 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
 
     let room = rooms.get(msg.roomCode);
     if (!room) {
-      room = new Room(msg.roomCode, msg.courseUrl ?? '');
+      // An empty courseUrl means "whatever this room is playing" — fine for a
+      // joiner, but there's nothing to inherit when you're the one opening it.
+      if (!msg.courseUrl) {
+        send(socket, {
+          type: 'error',
+          message: 'that room does not exist yet — the first player has to pick the course',
+        });
+        return;
+      }
+      room = new Room(msg.roomCode, msg.courseUrl);
       rooms.set(msg.roomCode, room);
     } else if (msg.courseUrl && room.courseUrl && msg.courseUrl !== room.courseUrl) {
       send(socket, {

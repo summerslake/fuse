@@ -716,8 +716,10 @@ async function initializeDebug() {
   // used for testing an example course in the browser
   // pass a courseUrl as a query param to load a course
   const params = new URLSearchParams(window.location.search);
-  const courseUrl = params.get('courseUrl');
-  if (!courseUrl) {
+  // Joining a room without naming a course is allowed — we adopt whatever the
+  // room is already playing, so nobody has to pass around an exact GLB url.
+  const courseUrl = params.get('courseUrl') ?? '';
+  if (!courseUrl && !params.get('room')) {
     throw new Error('No courseUrl provided');
   }
   gameContext.setupData = generateSetupData(1);
@@ -863,6 +865,13 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   net.on('joined', (m) => {
     gameContext.clientId = m.clientId;
     console.log('[net] joined as', m.clientId);
+    // Joined without naming a course: play whatever the room is playing. Saves
+    // the other players from having to pass around an exact GLB url.
+    if (!courseUrl && m.room?.courseUrl) {
+      console.log('[net] adopting the room course:', m.room.courseUrl);
+      gameContext.gameData = { ...gameContext.gameData!, courseUrl: m.room.courseUrl };
+      lobby?.setCourseName(m.room.courseUrl.split('/').pop() ?? '');
+    }
   });
   net.on('error', (msg) => {
     console.warn('[net] error:', msg);
