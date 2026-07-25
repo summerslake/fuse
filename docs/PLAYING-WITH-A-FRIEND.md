@@ -1,93 +1,66 @@
-# Playing a round with a friend
+# Playing a round together
 
-Two people, two launch monitors, two houses, one round. One of you **hosts** (serves
-the game and runs the relay); the other just launches OpenGolfSim pointed at the
-host's address.
+Two people, two launch monitors, two houses, one round. One of you **hosts**; the
+other launches OpenGolfSim pointed at the host's address and joins.
 
-The guest does **not** need this repo, node, git, or a matching OpenGolfSim
-version — they load the host's build over the network, so both ends run the same
-code by construction and can never drift out of protocol sync.
+The guest needs **no repo, no node, no git, and no particular OpenGolfSim
+version** — they load the host's build over the network, so both ends run
+identical code and can't drift out of sync.
 
----
-
-## Host setup
-
-> Full host runbook, including LAN rehearsal and troubleshooting:
-> [HOSTING.md](./HOSTING.md). The short version follows.
-
-### 1. Forward two ports
-
-Both TCP, to the host machine:
-
-| Port | What it is | Why the guest needs it |
-|---|---|---|
-| `5173` | the game (FUSE build + the OpenGolfSim API passthrough) | their Desktop loads the game from here |
-| `8080` | the multiplayer relay (WebSocket) | shots and roster sync flow through here |
-
-### 2. Start the server — with `--host`
-
-```bash
-npm run build:examples
-OGS_MP_SECRET='pick-something-long' npx vite preview --config vite.config.examples.js --host
-```
-
-**`--host` is not optional.** Without it Vite binds to `localhost` only, and a
-forwarded port reaches nothing. (The relay on 8080 already listens on all
-interfaces.) You should see a `Network:` line in the output — that's the proof.
-
-`OGS_MP_SECRET` is the room password. Without it, anyone who finds the port can
-join the room and inject shots. Send it to your guest along with your IP.
-
-### 3. Launch your own Desktop
-
-```bash
-open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
-```
-
-Then **Multiplayer** in the library → pick the course → room code → **Join room**.
+Host setup lives in [HOSTING.md](./HOSTING.md). Everything below is the guest's
+half — send it to them as-is, with the three placeholders filled in.
 
 ---
 
-## Guest setup
+## Guest checklist
 
-Send them everything below, with the placeholders filled in:
+Your host will give you three things: **`<HOST-IP>`**, a **`<ROOM>`** code, and a
+**`<SECRET>`** (maybe blank).
 
-- `<HOST-IP>` — the host's public IP
-- `<ROOM>` — any short code you both agree on, e.g. `garage`
-- `<SECRET>` — the value of `OGS_MP_SECRET`
+```
+□ 1.  install the OpenGolfSim BETA        (the stable build may not include FUSE)
+□ 2.  set your launch monitor up, confirm a normal solo round works
+□ 3.  quit OpenGolfSim completely
+□ 4.  launch it from a terminal with the host's address  (commands below)
+□ 5.  library loads as normal → click the Multiplayer tile
+□ 6.  type the room code + secret → Join room
+□ 7.  wait for "Start round"
+```
 
-### 1. Install the OpenGolfSim **beta**
+---
 
-The stable release may not include FUSE (the WebGL engine this runs on). The beta
-tracks the `testing` channel. Ask the host for the exact installer link they used
-— that guarantees you're on a build that can run it.
+## 1. Install the beta
 
-Set your launch monitor up in it as normal, and confirm a solo round works before
-trying multiplayer. That isolates any hardware problem from any network problem.
+The stable release may not include FUSE, the WebGL engine this runs on. Ask your
+host for the exact installer link they used — that guarantees a build that can
+run it.
 
-### 2. Launch it pointed at the host
+Set up your launch monitor and **play a normal solo round first.** If something
+goes wrong later, this tells you it isn't your hardware.
+
+## 2. Launch it pointed at the host
 
 OpenGolfSim decides where to load the game from at startup, from an environment
-variable. It has to be launched from a terminal so it can see that variable —
-double-clicking the icon will not work.
+variable — so it has to be launched from a terminal. **Double-clicking the icon
+will not work**, and it has to be fully quit first (the variable is only read at
+startup).
 
-#### macOS
+### macOS
 
 ```bash
 open --env OGS_APP_URL=http://<HOST-IP>:5173 -a "/Applications/OpenGolfSim.app"
 ```
 
-Quit OpenGolfSim completely first (⌘Q) if it's already running — the variable is
-only read at startup.
+Quit first with ⌘Q, or `pkill -x OpenGolfSim`.
 
-#### Windows — PowerShell
+### Windows — PowerShell
 
 ```powershell
 $env:OGS_APP_URL = "http://<HOST-IP>:5173"
 & "$env:LOCALAPPDATA\Programs\OpenGolfSim\OpenGolfSim.exe"
 ```
 
-#### Windows — Command Prompt
+### Windows — Command Prompt
 
 ```cmd
 set OGS_APP_URL=http://<HOST-IP>:5173
@@ -95,20 +68,32 @@ set OGS_APP_URL=http://<HOST-IP>:5173
 ```
 
 If that path is wrong: right-click the OpenGolfSim shortcut → **Properties** →
-copy the **Target** field and use that path instead. Close OpenGolfSim fully
-first (check the system tray).
+copy the **Target** field and use that instead. Make sure it's fully closed
+first, including the system tray.
 
-### 3. Play
+## 3. Join
 
-1. The library should load as normal — your account, your courses.
-2. Click the **Multiplayer** tile.
-3. Type the **room code** and the **secret**. The relay address is already filled
-   in — it points back at the host automatically.
-4. Click **Join room**. You'll see everyone who has joined.
-5. Either player clicks **Start round**.
+1. The library loads as normal — your account, your courses.
+2. Click the **Multiplayer** tile. If it isn't there, the override didn't take:
+   OpenGolfSim was already running, or was started by double-click.
+3. Type the **room code** and the **secret**. The relay address is already
+   filled in — it points back at the host automatically.
+4. **Join room.** You'll see everyone who has joined.
+5. Either player hits **Start round**.
 
-Whoever is farthest from the pin plays next, and you'll both watch every shot fly
-in real time. **Leave** (top of the screen, under the yardage) drops you out.
+The course is whatever the host picked; you inherit it automatically.
+
+## 4. Playing
+
+Whoever is **farthest from the pin** plays next, and you both watch every shot
+fly in real time. Shots are ignored when it isn't your turn, so a practice swing
+won't wreck the scorecard.
+
+The map shows everyone's ball. **Leave** — top of the screen, under the yardage —
+drops you out.
+
+If your connection blips, it reconnects on its own and catches you up on
+anything you missed. The corner will say "reconnecting…" while it's working.
 
 ---
 
@@ -116,28 +101,10 @@ in real time. **Leave** (top of the screen, under the yardage) drops you out.
 
 | Symptom | Cause |
 |---|---|
-| Library is empty / can't sign in | The host isn't running the server, or 5173 isn't forwarded. |
-| Game loads, but joining fails | 8080 isn't forwarded. 5173 and 8080 are separate — both are needed. |
-| "bad room secret" | The secret doesn't match `OGS_MP_SECRET`. |
-| "protocol version mismatch" | You're not loading the host's build — check `OGS_APP_URL` really took. |
-| "that round has already started" | They started without you. Pick a fresh room code and start again. |
-| "courseUrl does not match the room" | Shouldn't happen — a joiner inherits the host's course. Tell the host. |
-| Normal solo game, no Multiplayer tile | The override didn't take: OpenGolfSim was already running, or was launched by double-click instead of the terminal. |
-
----
-
-## Two things the host should know
-
-**Forwarding 5173 exposes an API passthrough.** That port proxies to
-`app.opengolfsim.com` so the guest's library and sign-in work. While it's
-forwarded, anyone who finds it can relay requests through your machine. Close the
-port when you're not playing.
-
-**The guest's OpenGolfSim login traffic routes through your machine.** Their
-Desktop derives its whole API base from `app_url`, so their auth requests pass
-through your proxy in transit. Fine between friends who know; worth saying out
-loud.
-
-**Both concerns go away with a private network** — Tailscale or similar between
-the two machines, no public ports at all. Same commands, with the Tailscale
-address in place of the public IP. Recommended if you play together often.
+| No Multiplayer tile, just a normal game | The override didn't take — app was already running, or launched by double-click. |
+| Library is empty / can't sign in | Can't reach the host's port 5173. Check the IP, and that they're running the server. |
+| Game loads but joining fails | Can't reach port 8080. It's a separate port — the host needs both open. |
+| "bad room secret" | The secret doesn't match. Watch for trailing spaces. |
+| "protocol version mismatch" | You're not loading the host's build. Check `OGS_APP_URL`. |
+| "that round has already started" | They started without you. Ask for a fresh room code. |
+| Shots do nothing | It isn't your turn — the away player plays next. |

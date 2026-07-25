@@ -12,7 +12,8 @@
     "build": "npm run build:lib && npm run build:examples",
     "build:lib": "vite build --config vite.config.js",
     "build:examples": "vite build --config vite.config.examples.js",
-    "dev": "vite --config vite.config.examples.js"
+    "dev": "vite --config vite.config.examples.js",
+    "host": "npm run build:examples && vite preview --config vite.config.examples.js --host"
   },
   "keywords": [],
   "author": "",
