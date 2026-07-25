@@ -216,7 +216,9 @@ async function setupRenderer() {
     canvas,
     renderMode: 'webgpu',
     qualityLevel: gameContext.qualityLevel,
-    antialias: true // gameContext.qualityLevel >= QualityMode.Medium
+    // antialiasing costs real frames on a weak GPU, and Low exists for exactly
+    // that machine (this was the condition already written here, commented out)
+    antialias: gameContext.qualityLevel >= QualityMode.Medium
   });
 
   await gameContext.renderer.init();

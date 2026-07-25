@@ -74,7 +74,9 @@ export class FuseRenderer {
     }
 
     this.renderer.setPixelRatio(pixelRatio);
-    this.renderer.shadowMap.enabled = true;
+    // Shadow maps are one of the most expensive things here and were on at every
+    // quality level — so "Low" wasn't actually low on a weak GPU.
+    this.renderer.shadowMap.enabled = this.qualityLevel > QualityMode.Low;
     this.renderer.shadowMap.type = PCFShadowMap;
     
 
