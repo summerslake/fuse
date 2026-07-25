@@ -192,6 +192,22 @@ describe('CourseGame — honors off the tee', () => {
   });
 });
 
+describe('CourseGame — players from a host app', () => {
+  it('survives a player with no clubs (a guest added in OGS Desktop)', () => {
+    const setup = makeSetup(['p1', 'p2']) as any;
+    delete setup.players[1].clubs; // exactly what the host app sent
+
+    const g = new CourseGame(makeCourse(), fakeBall, { setupData: setup });
+    const guest = player(g, 'p2');
+    expect(guest.clubs.length).toBeGreaterThan(0);
+    expect(guest.currentClub).toBeDefined();
+
+    // and the round still plays — autoSelectClub reads clubs[] too
+    play(g, fairway(30));
+    expect(g.activePlayer.id).toBe('p2');
+  });
+});
+
 describe('CourseGame — player ownership', () => {
   it('owns every player by default, so isLocalTurn is always true', () => {
     const g = makeGame();

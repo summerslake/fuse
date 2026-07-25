@@ -687,7 +687,16 @@ function preLoad() {
       gameContext.isReady = true;
     }
   });
-  gameContext.loadingScreen.load(setupCourse);
+  // The loading screen shows only the message, and a host app gives us no
+  // console — send the stack to it so the failure is diagnosable from its log.
+  gameContext.loadingScreen.load(async () => {
+    try {
+      await setupCourse();
+    } catch (err) {
+      app.log(`[fuse] course setup failed: ${(err as Error)?.stack ?? err}`);
+      throw err;
+    }
+  });
   document.body.style.opacity = '1';
   gameContext.timer.connect(document);  
 }

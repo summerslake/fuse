@@ -29,16 +29,24 @@ function getDeviceType() {
 
 
 /**
+ * A minimal bag, used when a player arrives without one. A host app can send a
+ * player with no clubs (a guest added in OGS Desktop's player manager), and the
+ * game needs *something* selectable — club choice doesn't affect ball flight,
+ * only what's displayed and reported back.
+ */
+export const DefaultClubs: OpenGolfSim.Club[] = [
+  { fullName: 'Driver', name: 'DR', id: 'DR', distance: 228 },
+  { fullName: '5 Iron', name: '5i', id: '5I', distance: 150 },
+  { fullName: 'Pitching Wedge', name: 'PW', id: 'PW', distance: 100 },
+  { fullName: 'Sand Wedge', name: 'SW', id: 'SW', distance: 50 },
+  { fullName: 'Putter', name: 'P', id: 'PT', distance: 0 }
+];
+
+/**
  * Generates setup data for testing
  */
 export function generateSetupData(playerCount: number = 1, override: Partial<OpenGolfSim.SetupData> = {}): OpenGolfSim.SetupData {
-  const clubs = [
-    { fullName: 'Driver', name: 'DR', id: 'DR', distance: 228 },
-    { fullName: '5 Iron', name: '5i', id: '5I', distance: 150 },
-    { fullName: 'Pitching Wedge', name: 'PW', id: 'PW', distance: 100 },
-    { fullName: 'Sand Wedge', name: 'SW', id: 'SW', distance: 50 },
-    { fullName: 'Putter', name: 'P', id: 'PT', distance: 0 }
-  ];
+  const clubs = DefaultClubs;
   const players = [];
   for (let i=0; i < playerCount; i++) {
     players.push({

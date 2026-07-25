@@ -36,11 +36,20 @@ namespace OpenGolfSim {
     name: string;
     id: string;
     distance: number;
+    /** e.g. "Pitching Wedge" — OGS Desktop sends this alongside the short name */
+    fullName?: string;
+    /** loft in degrees, as sent by OGS Desktop */
+    angle?: number;
   }
 
   interface Player {
     name: string;
     id: string;
+    /**
+     * NOTE: a host app can omit this in practice — a guest added in OGS
+     * Desktop's player manager arrives with no bag. `CoursePlayer` falls back to
+     * `DefaultClubs` rather than trusting it.
+     */
     clubs: Club[];
   }
   
