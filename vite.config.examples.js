@@ -34,8 +34,10 @@ export default defineConfig({
         server.printUrls = () => {
           console.log('\n    FUSE Examples running\n');
           _print();
+          // NB: `open -a` goes through LaunchServices and does NOT pass env
+          // vars to the app — the binary has to be launched directly.
           console.log(
-            `    OGS Desktop:  OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} open -a "OpenGolfSim Desktop"` +
+            `    OGS Desktop:  OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} "/Applications/OpenGolfSim.app/Contents/MacOS/OpenGolfSim"` +
               (process.env.OGS_DIAG === '1'
                 ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page\n'
                 : '\n    (set OGS_DIAG=1 to serve the diagnostics page instead of the game)\n')
