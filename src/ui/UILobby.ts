@@ -20,6 +20,13 @@ export interface UILobbyOptions {
   defaults?: Partial<UILobbyJoinParams>;
   /** shown read-only so everyone can confirm they're loading the same course */
   courseName?: string;
+  /**
+   * Player names supplied by a host app (OGS Desktop sends real players with
+   * real club distances). When present the name field is replaced by a static
+   * list — there's nothing to ask, and letting someone retype names here would
+   * only risk detaching them from their clubs.
+   */
+  hostPlayers?: string[];
 }
 
 interface UILobbyEvents {
@@ -50,6 +57,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   #roomTitle: HTMLElement;
   #startButton: HTMLButtonElement;
   #joinButton: HTMLButtonElement;
+  #hostPlayers: string[];
   #inputs: Record<keyof UILobbyJoinParams, HTMLInputElement>;
 
   constructor(parent: string | Element, options: UILobbyOptions = {}) {
@@ -72,6 +80,8 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     this.#form.style.border = 'none';
     this.#form.style.background = 'none';
 
+    const hostPlayers = options.hostPlayers ?? [];
+    this.#hostPlayers = hostPlayers;
     this.#inputs = {
       // two names here seats two players on this machine — the garage case
       name: this.#field('Your name (comma separated for 2 local players)', defaults.name ?? '', 'Lake, Sarah'),
@@ -80,10 +90,29 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
       secret: this.#field('Room secret (optional)', defaults.secret ?? '', ''),
     };
     for (const key of ['name', 'room', 'server', 'secret'] as const) {
+      // the host app already told us who's playing — show them, don't ask
+      if (key === 'name' && hostPlayers.length) continue;
       this.#form.append(this.#inputs[key].parentElement!);
       this.#inputs[key].addEventListener('keydown', (ev) => {
         if ((ev as KeyboardEvent).key === 'Enter') this.#emitJoin();
       });
+    }
+    if (hostPlayers.length) {
+      const wrapper = document.createElement('div');
+      wrapper.className = styles.lobbyField;
+      const label = document.createElement('div');
+      label.className = styles.lobbyLabel;
+      label.textContent = hostPlayers.length > 1 ? 'Playing on this machine' : 'Playing as';
+      const list = document.createElement('div');
+      list.className = styles.lobbyPlayers;
+      list.append(...hostPlayers.map((name) => {
+        const rowEl = document.createElement('div');
+        rowEl.className = styles.lobbyPlayer;
+        rowEl.textContent = name;
+        return rowEl;
+      }));
+      wrapper.append(label, list);
+      this.#form.prepend(wrapper);
     }
 
     this.#joinButton = this.#button('Join room', true);
@@ -146,7 +175,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     this.#room.style.display = 'none';
     this.#pill.classList.remove(styles.lobbyPillOpen);
     this.#setFormEnabled(true);
-    this.#inputs.name.focus();
+    (this.#hostPlayers.length ? this.#inputs.room : this.#inputs.name).focus();
   }
 
   /** Hide everything (single-machine play, or after a hard error). */
@@ -166,7 +195,9 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
   /** Current form values — handy for auto-joining from query params. */
   get values(): UILobbyJoinParams {
     return {
-      name: this.#inputs.name.value.trim(),
+      name: this.#hostPlayers.length
+        ? this.#hostPlayers.join(', ')
+        : this.#inputs.name.value.trim(),
       room: this.#inputs.room.value.trim(),
       server: this.#inputs.server.value.trim(),
       secret: this.#inputs.secret.value,

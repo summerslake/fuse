@@ -3,6 +3,29 @@
   <head>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Fuse Course</title>
+    <style>
+      /* Opt into multiplayer from a host-launched round. Sits above the loading
+         screen (z-index 99999) since that's where you'll usually click it. */
+      .mp-opt-in {
+        position: fixed;
+        z-index: 100001;
+        right: var(--grid-size);
+        bottom: var(--grid-size);
+        padding: var(--base-padding) calc(var(--base-padding) * 2);
+        font-family: var(--font-family);
+        font-size: var(--medium-font-size);
+        font-weight: 800;
+        color: var(--text-color);
+        background-color: var(--bg-color);
+        border: 1px solid var(--border-color);
+        border-radius: var(--border-radius);
+        cursor: pointer;
+      }
+      .mp-opt-in:hover {
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+      }
+    </style>
   </head>
   <body style="opacity: 0">
     <canvas id="canvas"></canvas>

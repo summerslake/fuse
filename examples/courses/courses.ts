@@ -81,6 +81,8 @@ const gameContext: {
   lobby?: UILobby,
   clientId?: string,
   localPlayerIds?: string[],
+  /** true when a host app (OGS Desktop) supplied the players and their clubs */
+  playersFromHost?: boolean,
   /** true once the lobby closed and the round is under way */
   roundStarted?: boolean,
   // true while the ball is flying a re-simulated remote shot (not a real local
@@ -372,13 +374,49 @@ function aimPointUpdated(forced = false) {
 }
 
 
+/**
+ * Launched by a host app (OGS Desktop). Solo is the default and behaves exactly
+ * as it always has — the course loads immediately, no extra clicks. Multiplayer
+ * is opt-in via a button on the loading screen.
+ *
+ * There is no URL to put a room code in here, and the roster has to be settled
+ * *before* CourseGame is built, so joining reloads the page with the intent
+ * stashed in sessionStorage. That's safe because Desktop re-sends `setup`
+ * immediately on reload (measured 2026-07-25: 0.0s into the new page load).
+ */
 async function handleSetup(payload: any) {
   console.log('Received setup event', payload);
   if (!payload?.setupData) throw new Error('No setupData received in setup event!');
   if (!payload?.gameData) throw new Error('No gameData received in setup event!');
   gameContext.setupData = payload?.setupData as OpenGolfSim.SetupData;
   gameContext.gameData = payload?.gameData as OpenGolfSim.GameData;
+  // the host app owns the player list here — real names, real club distances
+  gameContext.playersFromHost = true;
+
+  const intent = takeLobbyIntent();
+  if (intent) {
+    // we reloaded out of a solo round to join a room; go straight back to it
+    openLobby(gameContext.gameData.courseUrl ?? '', new URLSearchParams(), intent);
+    return;
+  }
+
   preLoad();
+  addMultiplayerButton();
+}
+
+/** Opt into multiplayer from a host-launched (solo) round. */
+function addMultiplayerButton() {
+  const button = document.createElement('button');
+  button.textContent = 'Multiplayer';
+  button.className = 'mp-opt-in';
+  button.addEventListener('click', () => {
+    button.remove();
+    openLobby(gameContext.gameData?.courseUrl ?? '', new URLSearchParams());
+  });
+  document.body.append(button);
+  // it lives on the loading screen and through the first shot; once a ball is
+  // struck, switching would throw away a round in progress
+  app.on('shot', () => button.remove());
 }
 
 async function setupCourse() {
@@ -698,30 +736,71 @@ function recallLobby(): Partial<UILobbyJoinParams> {
 }
 
 /**
- * Show the multiplayer lobby: pick a name + room, watch players arrive, start
- * the round together, and leave again. Query params only seed the form.
+ * Joining has to happen before CourseGame is built, but a host-launched round is
+ * already under way by the time you can click anything — so the lobby stashes
+ * where you're going and reloads. Session-scoped: it must not outlive the window.
  */
-function openLobby(courseUrl: string, params: URLSearchParams) {
+const LOBBY_INTENT_KEY = 'ogs.lobby.intent';
+
+function storeLobbyIntent(values: UILobbyJoinParams) {
+  try {
+    sessionStorage.setItem(LOBBY_INTENT_KEY, JSON.stringify(values));
+  } catch { /* nothing to do — the reload will just land back on solo */ }
+}
+/** Read the pending intent and clear it, so a later reload doesn't re-join. */
+function takeLobbyIntent(): UILobbyJoinParams | undefined {
+  try {
+    const raw = sessionStorage.getItem(LOBBY_INTENT_KEY);
+    sessionStorage.removeItem(LOBBY_INTENT_KEY);
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Show the multiplayer lobby: pick a room, watch players arrive, start the round
+ * together, and leave again. Query params only seed the form (browser); a host
+ * app supplies the players instead, and `resume` is a join we already committed
+ * to before reloading.
+ */
+function openLobby(courseUrl: string, params: URLSearchParams, resume?: UILobbyJoinParams) {
   const saved = recallLobby();
+  const hostPlayers = gameContext.playersFromHost
+    ? (gameContext.setupData?.players ?? []).map((player) => player.name)
+    : undefined;
   const lobby = new UILobby(document.body, {
     courseName: courseUrl.split('/').pop(),
+    hostPlayers,
     defaults: {
-      name: params.get('name') || saved.name || '',
-      room: params.get('room') || saved.room || '',
-      server: params.get('server') || saved.server || 'localhost:8080',
-      secret: params.get('secret') || '',
+      name: resume?.name || params.get('name') || saved.name || '',
+      room: resume?.room || params.get('room') || saved.room || '',
+      server: resume?.server || params.get('server') || saved.server || 'localhost:8080',
+      secret: resume?.secret || params.get('secret') || '',
     },
   });
   gameContext.lobby = lobby;
   document.body.style.opacity = '1'; // preLoad normally does this, but that's post-Start
 
-  lobby.on('join', (values) => joinRoom(values, courseUrl));
+  lobby.on('join', (values) => {
+    // A host-launched round is already loading behind this overlay; reload so we
+    // come back clean and can build the game from the server roster instead.
+    if (gameContext.playersFromHost && !resume) {
+      storeLobbyIntent(values);
+      window.location.reload();
+      return;
+    }
+    joinRoom(values, courseUrl);
+  });
   lobby.on('start', () => gameContext.net?.sendStart());
   lobby.on('leave', () => leaveRoom());
   lobby.open();
 
-  // ?room= means "I already know where I'm going" — connect straight away.
-  if (params.get('room') && lobby.values.name) {
+  // Already committed (we reloaded to get here), or ?room= says "I know where
+  // I'm going" — either way, connect straight away.
+  if (resume) {
+    joinRoom(resume, courseUrl);
+  } else if (params.get('room') && lobby.values.name) {
     joinRoom(lobby.values, courseUrl);
   }
 }
@@ -736,12 +815,17 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   const lobby = gameContext.lobby;
   rememberLobby(values);
 
-  // One field, comma separated, covers the garage case: "Lake, Sarah" seats two
-  // local players on this machine — both owned by (and played from) this client.
-  const names = values.name.split(',').map((n) => n.trim()).filter(Boolean);
-  const setupData = generateSetupData(names.length || 1);
-  names.forEach((n, i) => { setupData.players[i].name = n; });
-  gameContext.setupData = setupData;
+  // A host app already sent us real players with real club distances — keep them
+  // exactly as they are. Only the browser demo invents players, where one field,
+  // comma separated, covers the garage case: "Lake, Sarah" seats two local
+  // players on this machine, both owned by (and played from) this client.
+  let setupData = gameContext.setupData!;
+  if (!gameContext.playersFromHost) {
+    const names = values.name.split(',').map((n) => n.trim()).filter(Boolean);
+    setupData = generateSetupData(names.length || 1);
+    names.forEach((n, i) => { setupData.players[i].name = n; });
+    gameContext.setupData = setupData;
+  }
 
   const net = new NetClient(`ws://${values.server}`, {
     roomCode: values.room,
@@ -800,6 +884,13 @@ function leaveRoom() {
   gameContext.net?.removeAllListeners();
   gameContext.net?.leave();
   if (gameContext.roundStarted) {
+    // Host-launched: reload bare, so `setup` arrives again and we land back in a
+    // normal solo round. Adding query params here would send us down the browser
+    // debug path, which needs a ?courseUrl we don't have.
+    if (gameContext.playersFromHost) {
+      window.location.reload();
+      return;
+    }
     const url = new URL(window.location.href);
     url.searchParams.delete('room'); // don't auto-rejoin what we just left
     url.searchParams.set('mp', '1');
