@@ -86,6 +86,8 @@ const gameContext: {
   playersFromHost?: boolean,
   /** true once the lobby closed and the round is under way */
   roundStarted?: boolean,
+  /** shots received before GameSync existed; applied in order once it does */
+  pendingShots: any[],
   // true while the ball is flying a re-simulated remote shot (not a real local
   // shot) — GameSync must not report its landing as our own result
   replayingRemoteShot?: boolean,
@@ -100,6 +102,7 @@ const gameContext: {
   qualityLevel: QualityMode.Medium,
   distanceToAim: 0,
   heightToAim: 0,
+  pendingShots: [],
   dialogs: {}
 };
 
@@ -603,6 +606,15 @@ async function setupCourse() {
       if (!gameContext.game || gameContext.game.localPlayerIds.has(playerId)) return;
       flyRemoteShot(launch);
     });
+
+    // Catch up on anything that happened while we were loading (or before we
+    // resumed). Scoring and turn order are deterministic, so replaying these in
+    // order lands us exactly where everyone else already is.
+    if (gameContext.pendingShots.length) {
+      console.log(`[net] catching up on ${gameContext.pendingShots.length} shot(s)`);
+      for (const shot of gameContext.pendingShots) gameContext.gameSync.applyShot(shot);
+      gameContext.pendingShots = [];
+    }
   }
   gameContext.game?.on('nextShot', (player) => {
     console.log(`A new player (${player.name}) is up!`);
@@ -972,6 +984,15 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     if (m.resumed) lobby?.setReconnecting(false);
     // Joined without naming a course: play whatever the room is playing. Saves
     // the other players from having to pass around an exact GLB url.
+    // Resumed into a round that's already under way (a reload, or Leave then
+    // rejoin). `started` was broadcast once, at the moment someone pressed
+    // Start, so it will never come again — build the game from the snapshot
+    // instead. The relay replays the shot log behind it and we catch up.
+    if (m.room?.started && !gameContext.roundStarted) {
+      console.log('[net] resuming into a round in progress');
+      startRound(m.room.roster);
+    }
+
     if (!course && m.room?.courseUrl) {
       console.log('[net] adopting the room course:', m.room.courseUrl);
       gameContext.gameData = { ...gameContext.gameData!, courseUrl: m.room.courseUrl };
@@ -996,17 +1017,27 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     lobby?.setRoster(values.room, m.roster, gameContext.clientId);
   });
 
-  net.on('started', (m) => {
+  const startRound = (roster: any[]) => {
     if (gameContext.roundStarted) return;
     gameContext.roundStarted = true;
     // Replace our local player list with the full server roster (namespaced ids).
-    gameContext.setupData!.players = m.roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs }));
-    gameContext.localPlayerIds = m.roster
+    gameContext.setupData!.players = roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs }));
+    gameContext.localPlayerIds = roster
       .filter((p) => p.ownerId === gameContext.clientId)
       .map((p) => p.id);
     console.log('[net] starting — this client owns', gameContext.localPlayerIds);
-    lobby?.setPlaying(values.room, m.roster.length);
+    lobby?.setPlaying(values.room, roster.length);
     preLoad();
+  };
+
+  net.on('started', (m) => startRound(m.roster));
+
+  // Shots can arrive before this client has a game: the course is still loading,
+  // or we just resumed into a round already in progress and the relay is
+  // replaying it. Hold them and feed them through GameSync once it exists —
+  // dropping them would leave this client's scorecard quietly wrong.
+  net.on('shot', (msg) => {
+    if (!gameContext.gameSync) gameContext.pendingShots.push(msg);
   });
 
   net.connect();

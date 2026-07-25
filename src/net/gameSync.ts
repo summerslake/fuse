@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { type CourseGame } from '@/courses/game';
 import { type GolfBall } from '@/objects/golfBall';
 import { type NetClient } from './client';
+import { type ShotMessage } from './types';
 
 /**
  * Wires a networked CourseGame to a NetClient for SCORING (the authoritative
@@ -58,12 +59,21 @@ export class GameSync {
 
     // 2. Server echoed a shot (local or remote) -> apply on every client. This
     //    both scores it and advances the turn (deterministically, same on all).
-    net.on('shot', ({ playerId, result }) => {
-      this.#game.applyShotResult(playerId, {
-        endPosition: new THREE.Vector3().fromArray(result.endPosition),
-        surface: result.surface as { type?: any } | undefined,
-        isHoled: result.isHoled,
-      });
+    net.on('shot', (msg) => this.applyShot(msg));
+  }
+
+  /**
+   * Score one shot from the wire. Public so shots that arrived before this
+   * client had a game — while the course was still loading, or replayed by the
+   * relay when resuming into a round already in progress — can be fed through
+   * the same path in order. Replaying the whole log from the start rebuilds the
+   * round exactly, because scoring and turn order are deterministic.
+   */
+  applyShot({ playerId, result }: ShotMessage) {
+    this.#game.applyShotResult(playerId, {
+      endPosition: new THREE.Vector3().fromArray(result.endPosition),
+      surface: result.surface as { type?: any } | undefined,
+      isHoled: result.isHoled,
     });
   }
 }
