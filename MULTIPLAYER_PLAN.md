@@ -175,12 +175,16 @@ real round on the Square. Everything below is toward that.
      connected; and the relay keeps a `shotLog` and replays whatever the
      returning client missed, so its scorecard and turn order catch up instead
      of silently diverging. The corner pill says "reconnecting…" meanwhile.
-     **Still open:** a client that *reloads* mid-round rejoins the room but has
-     lost its in-memory `CourseGame` — the replay rebuilds scoring only from the
-     shots it receives, and it never saw the earlier ones. Needs a state
-     snapshot on resume, or replaying the whole `shotLog` into a fresh game.
-   - Pre-load race: a shot arriving before a client finishes loading the GLB can
-     be missed — GameSync is created after load.
+   - ✅ ~~Rejoining a round already in progress~~ — done 2026-07-25. `started` is
+     broadcast once, so a client arriving later was never told to build the
+     game: Leave-then-rejoin (and reload-mid-round) left you in a lobby whose
+     Start button the relay ignores. The round is now built from the `joined`
+     snapshot, which already carries `started` and the roster, and the replayed
+     `shotLog` reproduces it exactly — deterministic scoring means replaying
+     from the start is exact, not approximate.
+   - ✅ ~~Pre-load race~~ — done with the same change. Shots arriving before this
+     client has a game (course still loading, or a resume replay) are held and
+     fed through `GameSync.applyShot` in order instead of being dropped.
    - An in-game "waiting for Brett…" indicator.
 4. ✅ ~~**Tidy-up** of the dead server turn machinery~~ — done 2026-07-25 with
    the lobby work (protocol v3).
@@ -197,6 +201,39 @@ real round on the Square. Everything below is toward that.
    (`GameSync` is scoring-only and assumes `CourseGame`). Simpler than the course
    mode, and it sets up **closest-to-the-pin**, which is mostly UI on top of
    shared shots.
+3b. **Tell an intentional leave apart from a dropped connection.** Right now the
+   relay treats both as a closed socket: mid-round it keeps the slot so the
+   player can return. That's correct for a wifi blip and wrong for someone who
+   pressed **Leave** — they stay in everyone else's roster, and the turn will
+   still pass to them, so the round stalls waiting for a player who has gone.
+   Nobody noticed while rejoin was broken; now that rejoin works, this is the
+   remaining half of the same feature.
+   - The client already sends a distinct `leave` message before closing — the
+     relay just handles it as `socket.close()`. It should instead remove that
+     client *and its roster entries*, even mid-round, and free its `clientKey`
+     so a later join is a genuinely new one.
+   - The harder half is the other clients: they deliberately ignore roster
+     changes after the round starts, because their `CourseGame` was built from
+     the frozen roster. Removing a player mid-round has to drop them from
+     `CourseGame.players` too, or the away calculation keeps selecting them.
+     Consider a `player_left` message rather than making clients diff rosters,
+     and decide what happens to a departed player's scorecard (keep it visible
+     and marked, most likely — silently vanishing mid-round reads as a bug).
+   - Watch the edge: leaving *while it's your turn* must hand the turn on, and
+     leaving as the last remaining player should end the round rather than
+     leave one client alone in a room it can't finish.
+4c. **Known visual bug: trees render as black squares on Low quality**
+   (2026-07-25, seen on a second machine). Only at Low. First theory — the
+   low-tier batch material swap losing node properties under WebGPU — was wrong;
+   removing that swap didn't fix it. Next suspect is the **billboard LOD**:
+   `trees.ts` sets `alphaTest = 0.0` with `alphaToCoverage = true` for any
+   material used at billboard level, and Low turns antialiasing off, so there is
+   no MSAA coverage for `alphaToCoverage` to act on and the cutout does nothing.
+   If that's right the fix is a real `alphaTest` rather than re-enabling AA.
+   **Also worth revisiting:** quality is a single 0/1/2 dial that bundles
+   antialiasing, post-processing and pixel ratio; a weak machine wants those
+   separately, and shadow-map resolution is the untouched lever with the best
+   cost/appearance ratio.
 5. **Play-feel polish (surfaced while testing).** The ~3s post-shot settle before
    the next player is noticeable; the gimme/auto-putt "you're done the instant you
    touch the green" (even from ~20m) can feel abrupt — worth revisiting the
