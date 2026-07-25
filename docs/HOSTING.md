@@ -16,7 +16,7 @@ written for them and assumes nothing.
 □ 2.  see a "Network:" line           (if not, nothing outside this machine can connect)
 □ 3.  note the address                LAN: the "Network:" line above (that IS your LAN IP)
                                       internet: curl -s ifconfig.me  + forward 5173 and 8080
-□ 4.  quit OpenGolfSim completely     pkill -x OpenGolfSim
+□ 4.  quit OpenGolfSim completely     pkill -9 -f "OpenGolfSim.app"
 □ 5.  open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
 □ 6.  Multiplayer tile → pick course → room code → Join room
 □ 7.  send guest: your IP, the room code, the secret (if you set one)
@@ -112,7 +112,7 @@ game that loads but can't join anything.
 ## 3. Launch your own OpenGolfSim
 
 ```bash
-pkill -x OpenGolfSim
+pkill -9 -f "OpenGolfSim.app"
 open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
 ```
 
@@ -155,6 +155,12 @@ Worth doing before involving anyone else. Same setup, no port forwarding.
      order, live ball flight, scoring.
 
 The browser version takes a minute and catches most problems.
+
+A plain LAN address isn't a "secure context" to a browser, unlike `localhost`, so
+a few web APIs are missing there. Three falls back from WebGPU to WebGL by
+itself, so it still renders — just possibly slower than what you see locally.
+OpenGolfSim Desktop doesn't have this issue: it whitelists whatever `app_url`
+you launched it with as a trusted origin.
 
 ---
 

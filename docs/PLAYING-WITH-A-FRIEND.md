@@ -51,7 +51,7 @@ startup).
 open --env OGS_APP_URL=http://<HOST-IP>:5173 -a "/Applications/OpenGolfSim.app"
 ```
 
-Quit first with ⌘Q, or `pkill -x OpenGolfSim`.
+Quit first with ⌘Q, or `pkill -9 -f "OpenGolfSim.app"`.
 
 ### Windows — PowerShell
 

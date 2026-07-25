@@ -27,17 +27,29 @@ export interface NetClientJoinParams {
 
 const CLIENT_KEY_STORAGE = 'ogs.net.clientKey';
 
+/**
+ * `crypto.randomUUID` only exists in a secure context, and a remote player loads
+ * the host's build from a plain LAN or public address — so it is exactly missing
+ * in the case this key matters most. Fall back to something unique enough: it
+ * only has to distinguish clients within one room.
+ */
+function randomKey(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return uuid;
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /** This browser's stable client key, generated once and remembered. */
 function persistentClientKey(): string {
   try {
     const existing = localStorage.getItem(CLIENT_KEY_STORAGE);
     if (existing) return existing;
-    const created = crypto.randomUUID();
+    const created = randomKey();
     localStorage.setItem(CLIENT_KEY_STORAGE, created);
     return created;
   } catch {
     // private mode: a per-session key still survives reconnects, just not reloads
-    return crypto.randomUUID();
+    return randomKey();
   }
 }
 
