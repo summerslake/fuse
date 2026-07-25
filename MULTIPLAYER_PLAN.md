@@ -1,6 +1,37 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅✅ **THE DESKTOP + SQUARE SPIKE PASSED** (2026-07-25, on real hardware).
+  Every open question for real-hardware play is now answered green, measured in
+  OGS Desktop v1.17.1 (Electron 43 / Chrome 150) against our own build:
+  - **Desktop loads our fork.** `OGS_APP_URL=http://localhost:5173` +
+    `open --env` → our page runs inside Desktop. **Path A confirmed.**
+  - **`app.appType === 'desktop'`** (not the iframe/`webapp` case that was
+    expected) — shots arrive via `window.ogsElectron`, already supported.
+  - **`ws://` works from inside Desktop.** Socket opened in 6ms and a real
+    `NetClient` completed a v3 join. No CSP, no mixed-content problem. This was
+    the true go/no-go and it passed — **the relay needs no TLS for local play.**
+  - **The `setup` event delivers real player data** — Lake with all 14 clubs,
+    real distances and lofts, gimmes `[3,7,100]`, `qualityLevel: 2`.
+  - **Real Square shots reach our build**, e.g.
+    `{ballSpeed:35.32, verticalLaunchAngle:28.34, horizontalLaunchAngle:-1.02, spinSpeed:3117, spinAxis:0.88}`
+    — field-for-field the documented `Shot` type, so `launchShot()` takes them
+    unchanged. **The Square path and the keyboard test-shot path converge.**
+  - Physics initialize normally under Desktop.
+
+  **Bug found and fixed on the way (`src/app.ts`, upstream-worthy):**
+  `initialize(cb)` waits on the `'ready'` event, but the only `emit('ready')`
+  sat at the end of `sendMessage`'s else-if chain — reachable *only* when
+  `appType === 'web'`. Under desktop/mobile/webapp the message is posted to the
+  host and the event never fires, so **any `app.initialize()` callback hangs
+  forever**. Invisible in a browser. Now emitted from `setReady()`. The hosted
+  build survives it because the courses example only uses that callback for the
+  query-param debug path.
+
+  **Do not repeat these dead ends:** a stuck `initialize()` looks exactly like a
+  WASM/CSP failure (it isn't — check `app.world` separately); an unstarted relay
+  looks exactly like a blocked WebSocket (check the port is actually listening);
+  and `isSecureContext` is true on localhost while `ws://` works fine there.
 - ✅ **Diagnostics page for the Desktop/Square spike** (2026-07-25).
   `examples/diagnostics/` — a read-only probe built to run *inside* Desktop where
   a console may not be reachable: every answer is on screen and mirrored through
@@ -119,11 +150,16 @@ affect a built deploy (no HMR). `setupMultiplayer` isn't HMR-safe; low priority.
 **The real goal:** Lake + 1 local player in the garage + Brett remote, playing a
 real round on the Square. Everything below is toward that.
 
-1. **Empirical Desktop + Square spike** (only the user can run — needs the app +
-   a launch monitor). Confirm: `OGS_APP_URL` points Desktop at our local/fork
-   build; the Desktop-loaded fuse page can open `ws://` to the relay; Square
-   shots flow through as `app.on('shot')`. This validates the whole thing on real
-   hardware. See the Desktop spike notes further down.
+1. ✅ ~~**Empirical Desktop + Square spike**~~ — **PASSED 2026-07-25.** All three
+   confirmed on real hardware: Desktop loads our build, `ws://` to the relay
+   works from inside it, and real Square shots arrive as `app.on('shot')`. See
+   the status entry at the top. **The new gating task is (1b).**
+1b. **Wire the lobby into the Desktop launch path.** Desktop launches
+   `courses/index.html` with no query string, so `initializeDebug()` never runs
+   and the lobby is unreachable — `app.on('setup')` goes straight to `preLoad()`
+   and a solo round. Also `joinRoom()` rebuilds players with
+   `generateSetupData()`, which would throw away the real 14-club bag Desktop
+   sends. Both must change before a real round with Brett.
 2. **Real-world connectivity.** For Lake↔Brett over the internet: run the
    standalone relay (`npm run server`, set `OGS_MP_SECRET`), port-forward its
    port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
