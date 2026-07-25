@@ -22,6 +22,7 @@ export default defineConfig({
         range: path.resolve(import.meta.dirname, 'examples/range/index.html'),
         courses: path.resolve(import.meta.dirname, 'examples/courses/index.html'),
         cornhole: path.resolve(import.meta.dirname, 'examples/cornhole/index.html'),
+        diagnostics: path.resolve(import.meta.dirname, 'examples/diagnostics/index.html'),
       },
     },
   },
@@ -33,7 +34,46 @@ export default defineConfig({
         server.printUrls = () => {
           console.log('\n    FUSE Examples running\n');
           _print();
+          console.log(
+            `    OGS Desktop:  OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} open -a "OpenGolfSim Desktop"` +
+              (process.env.OGS_DIAG === '1'
+                ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page\n'
+                : '\n    (set OGS_DIAG=1 to serve the diagnostics page instead of the game)\n')
+          );
         };
+      },
+    },
+    {
+      /**
+       * Let OGS Desktop load this dev server. Desktop launches games from
+       * `${app_url}/fuse/examples/<game>/index.html`, but our root is `examples/`,
+       * so those requests 404 without a rewrite. With OGS_DIAG=1 every game it
+       * launches serves the diagnostics page instead — that's the spike: point
+       * Desktop here, launch anything, read the screen.
+       */
+      name: 'ogs-desktop-compat',
+      configureServer(server) {
+        const diagnostics = process.env.OGS_DIAG === '1';
+        server.middlewares.use((req, res, next) => {
+          if (!req.url) return next();
+          if (req.url.startsWith('/fuse/examples/')) {
+            req.url = req.url.slice('/fuse/examples'.length);
+          } else if (req.url.startsWith('/fuse/')) {
+            req.url = req.url.slice('/fuse'.length);
+          }
+          // Only the game entry pages, never assets or the diagnostics page
+          // itself. Redirect rather than rewrite so the browser's base URL moves
+          // too — the page's relative script/asset paths depend on it.
+          if (
+            diagnostics &&
+            !req.url.startsWith('/diagnostics/') &&
+            /^\/[^/]+\/index\.html(\?|$)/.test(req.url)
+          ) {
+            res.writeHead(302, { Location: '/diagnostics/index.html' });
+            return res.end();
+          }
+          next();
+        });
       },
     },
     {

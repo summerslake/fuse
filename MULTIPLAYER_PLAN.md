@@ -1,6 +1,15 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅ **Diagnostics page for the Desktop/Square spike** (2026-07-25).
+  `examples/diagnostics/` — a read-only probe built to run *inside* Desktop where
+  a console may not be reachable: every answer is on screen and mirrored through
+  `app.log()` into Desktop's main.log. Reports `appType`/embedding, page protocol,
+  Rapier WASM init, a raw `ws://` open **and** a real relay join, the `setup`
+  payload, and a live `app.on('shot')` log. Two dev-server changes came with it:
+  requests under `/fuse/examples/...` (Desktop's URL shape) are now rewritten to
+  the examples root, and `OGS_DIAG=1` serves the diagnostics page in place of
+  whatever game Desktop launches. See the spike steps below.
 - ✅ **Honors + course map shows every ball** (2026-07-25). Two play-feel fixes
   from live testing:
   1. **Honors.** The next tee went to roster order, so Lake teed off first after
@@ -657,21 +666,30 @@ no bridge. Fall back to Path B only if the `app_url` override doesn't take or th
 
 #### ⚠ First task before Phase 3 — an empirical spike (needs the running app + a Square)
 
-Only the user can run this (GUI + hardware). It answers both open questions at once.
+Only the user can run this (GUI + hardware). **Tooling for it now exists** — see
+"Diagnostics page" below; the steps are:
 
-1. **Point Desktop at a local build.** Serve *stock* fuse locally
-   (`npm run build` + a static serve, or `npm run dev`) and launch Desktop with
-   `OGS_APP_URL=http://localhost:PORT` (from a terminal so the env var is seen),
-   then launch a fuse course from the library.
-   - Does our locally-served fuse load inside Desktop? → confirms Path A viable.
-2. **In that running fuse page, check two things** (temporary on-screen log or via
-   the page's console):
-   - `app.appType` → tells us `'webapp'` (iframe/postMessage) vs `'desktop'` vs
-     `'web'`, and therefore how shots arrive and whether our fork needs changes.
-   - `new WebSocket('ws://<host>:<port>')` to a throwaway server → does it open, or
-     is it blocked as mixed content / by CSP? This is the real go/no-go for `ws://`
-     vs needing `wss://`.
-3. Take a real swing; confirm the shot reaches the page (fuse simulates it).
+```bash
+OGS_DIAG=1 npm run dev          # serves the diagnostics page for any game Desktop launches
+OGS_APP_URL=http://localhost:5173 open -a "OpenGolfSim Desktop"
+```
+
+then launch any fuse game from the Desktop library and read the screen. It reports
+`app.appType`, the embedding, the page protocol, whether Rapier's WASM initialized,
+whether a `ws://` socket opens **and** completes a real relay join, the `setup`
+payload, and a live log of `app.on('shot')` events. Take one real swing to finish it.
+
+- Page loads at all → Path A viable.
+- `ws://` row green → the whole real-play story is just "override `app_url`".
+  Red on an https page → mixed content; the relay needs TLS or Path B.
+- Shots appear → the Square reaches our build; nothing else in the shot path
+  differs from the keyboard test shots we've been developing against.
+
+**Path-shape finding (2026-07-25):** Desktop requests
+`${app_url}/fuse/examples/<game>/index.html`, but the dev server's root is
+`examples/`, so those URLs 404ed. `vite.config.examples.js` now has an
+`ogs-desktop-compat` middleware that strips the `/fuse/examples` prefix — without
+it step 1 fails for a reason that has nothing to do with whether Path A works.
 
 If step 1 loads and step 2's WebSocket opens, Path A is green and the whole
 real-play story is just "override `app_url`, open `ws://` to the relay." If the

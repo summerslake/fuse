@@ -1,0 +1,227 @@
+import { app, NetClient, PROTOCOL_VERSION } from '@opengolfsim/fuse';
+
+/**
+ * A read-only probe for the real-hardware path, built to be run *inside* OGS
+ * Desktop where a console isn't necessarily reachable — every answer is on
+ * screen, and mirrored through `app.log()` so it also lands in Desktop's
+ * main.log.
+ *
+ * It answers the three things the empirical spike needs to know:
+ *   1. Did our build load, and how is the host app embedding it (`appType`)?
+ *   2. Can this page open a WebSocket to the relay, or is it blocked?
+ *   3. Do launch monitor shots actually arrive as `app.on('shot')`?
+ *
+ * It never simulates a shot or touches CourseGame — nothing here can affect a
+ * real round.
+ */
+
+type Status = 'pass' | 'fail' | 'warn' | 'pending';
+
+const report: string[] = [];
+
+function row(container: HTMLElement, key: string, value: string, status?: Status) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  const k = document.createElement('span');
+  k.className = 'k';
+  k.textContent = key;
+  const v = document.createElement('span');
+  v.className = 'v';
+  v.textContent = value;
+  el.append(k, v);
+  if (status) {
+    const chip = document.createElement('span');
+    chip.className = `chip ${status}`;
+    chip.textContent = status === 'pending' ? '…' : status;
+    el.append(chip);
+  }
+  container.append(el);
+  report.push(`${key}: ${value}${status ? ` [${status}]` : ''}`);
+  app.log(`[diag] ${key}: ${value}`);
+  return { row: el, value: v, chip: el.querySelector('.chip') as HTMLElement | null };
+}
+
+function setRow(
+  handle: { value: HTMLElement, chip: HTMLElement | null },
+  value: string,
+  status: Status
+) {
+  handle.value.textContent = value;
+  if (handle.chip) {
+    handle.chip.className = `chip ${status}`;
+    handle.chip.textContent = status === 'pending' ? '…' : status;
+  }
+  report.push(`  -> ${value} [${status}]`);
+  app.log(`[diag] -> ${value} [${status}]`);
+}
+
+const el = (id: string) => document.getElementById(id)!;
+
+// ---------------------------------------------------------------- environment
+
+const env = el('env');
+const embedded = window.self !== window.top;
+
+row(env, 'app.appType', app.appType, app.appType === 'web' ? 'warn' : 'pass');
+row(env, 'Embedding', embedded ? 'iframe (postMessage)' : 'top-level window');
+row(env, 'window.ogsElectron', typeof (window as any).ogsElectron !== 'undefined' ? 'present' : 'absent');
+row(env, 'Page URL', window.location.href);
+// What actually decides ws:// vs wss:// is the page's *scheme*, not the secure
+// context — localhost is a trustworthy origin (isSecureContext true) and still
+// allows ws:// happily. Only an https page has its ws:// blocked as mixed content.
+const httpsPage = window.location.protocol === 'https:';
+row(env, 'Page protocol', window.location.protocol, httpsPage ? 'warn' : 'pass');
+row(env, 'Secure context', String(window.isSecureContext));
+row(env, 'User agent', navigator.userAgent);
+
+const rapierRow = row(env, 'Rapier physics (WASM)', 'initializing…', 'pending');
+app.initialize(() => setRow(rapierRow, 'initialized', 'pass'));
+
+// `web` means no host app is talking to us — expected in a plain browser tab,
+// but under Desktop it would mean shots have no route in.
+if (app.appType === 'web') {
+  row(env, 'Note', 'appType "web" — no host app detected. In a plain browser tab this is normal.');
+}
+// An https page has its ws:// blocked as mixed content — the relay would need TLS.
+if (httpsPage) {
+  row(env, 'Note', 'This page is https, so the browser will block ws:// as mixed content. If the relay test fails, that is why — the relay needs TLS (wss://), or Desktop needs to load us over http.');
+}
+
+// -------------------------------------------------------------------- relay
+
+const relay = el('relay');
+const hostInput = el('relay-host') as HTMLInputElement;
+hostInput.value = `${window.location.hostname || 'localhost'}:8080`;
+
+row(relay, 'Protocol version', String(PROTOCOL_VERSION));
+const socketRow = row(relay, 'WebSocket opens', 'not tested yet', 'pending');
+const joinRow = row(relay, 'Relay join (full protocol)', 'not tested yet', 'pending');
+
+let client: NetClient | undefined;
+
+function testRelay() {
+  const host = hostInput.value.trim();
+  const url = `ws://${host}`;
+  setRow(socketRow, `connecting to ${url}…`, 'pending');
+  setRow(joinRow, 'waiting on the socket…', 'pending');
+
+  // Step 1: can a socket open at all? This is the question that decides Path A —
+  // a CSP or mixed-content block fails here, before any protocol is involved.
+  const started = performance.now();
+  let raw: WebSocket;
+  try {
+    raw = new WebSocket(url);
+  } catch (err) {
+    setRow(socketRow, `threw immediately: ${err}`, 'fail');
+    setRow(joinRow, 'skipped — no socket', 'fail');
+    return;
+  }
+
+  const timeout = setTimeout(() => {
+    if (raw.readyState !== WebSocket.OPEN) {
+      raw.close();
+      setRow(socketRow, 'timed out after 5s — no relay listening, or blocked', 'fail');
+      setRow(joinRow, 'skipped — no socket', 'fail');
+    }
+  }, 5000);
+
+  raw.addEventListener('open', () => {
+    clearTimeout(timeout);
+    setRow(socketRow, `open in ${(performance.now() - started).toFixed(0)}ms`, 'pass');
+    raw.close();
+    joinRelay(host);
+  });
+
+  raw.addEventListener('error', () => {
+    clearTimeout(timeout);
+    setRow(
+      socketRow,
+      window.isSecureContext
+        ? 'failed — likely blocked (secure context forbids ws://)'
+        : 'failed — relay not running, wrong host, or blocked',
+      'fail'
+    );
+    setRow(joinRow, 'skipped — no socket', 'fail');
+  });
+}
+
+/** Step 2: the real client, real protocol — proves the whole chain works. */
+function joinRelay(host: string) {
+  setRow(joinRow, 'joining room "diagnostics"…', 'pending');
+  client?.close();
+  client = new NetClient(`ws://${host}`, {
+    roomCode: 'diagnostics',
+    courseUrl: 'diagnostics',
+    players: [{ name: 'Diagnostics', id: 'diagnostics', clubs: [] }],
+  });
+  client.on('joined', (msg) => {
+    setRow(joinRow, `joined as ${msg.clientId} — the relay is reachable and speaking v${PROTOCOL_VERSION}`, 'pass');
+    client?.leave();
+  });
+  client.on('error', (message) => setRow(joinRow, `relay refused the join: ${message}`, 'fail'));
+  client.connect();
+}
+
+el('relay-test').addEventListener('click', testRelay);
+testRelay();
+
+// -------------------------------------------------------------------- setup
+
+const setup = el('setup');
+const setupRow = row(setup, 'setup event', 'waiting for the host app…', 'pending');
+
+app.on('setup', (payload: any) => {
+  setRow(setupRow, 'received', 'pass');
+  const players = payload?.setupData?.players ?? [];
+  row(setup, 'Players', players.length
+    ? players.map((p: any) => `${p.name} (${p.clubs?.length ?? 0} clubs)`).join(', ')
+    : 'none in payload');
+  row(setup, 'Course URL', payload?.gameData?.courseUrl ?? 'none');
+  row(setup, 'Units', payload?.setupData?.units ?? 'unknown');
+  row(setup, 'Putting enabled', String(payload?.setupData?.puttingEnabled));
+  row(setup, 'Raw setupData', JSON.stringify(payload?.setupData ?? {}));
+});
+
+// --------------------------------------------------------------------- shots
+
+const shotLog = el('shot-log');
+const shotCount = el('shot-count');
+let shots = 0;
+
+app.on('shot', (shot: any) => {
+  shots++;
+  shotCount.textContent = String(shots);
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  // the documented Shot shape (globals.d.ts); the raw payload is logged below
+  // it too, so a field the Square names differently still shows up
+  const summary = [
+    `ball ${shot?.ballSpeed ?? '?'} mph`,
+    `VLA ${shot?.verticalLaunchAngle ?? '?'}`,
+    `HLA ${shot?.horizontalLaunchAngle ?? '?'}`,
+    `spin ${shot?.spinSpeed ?? '?'} / axis ${shot?.spinAxis ?? '?'}`,
+  ].join('  ');
+  line.innerHTML = `<b>${time}</b>  ${summary}`;
+  const raw = document.createElement('div');
+  raw.textContent = `   ${JSON.stringify(shot)}`;
+  if (shots === 1) shotLog.textContent = '';
+  shotLog.prepend(line, raw);
+  report.push(`shot ${shots}: ${JSON.stringify(shot)}`);
+  app.log(`[diag] shot ${shots}: ${JSON.stringify(shot)}`);
+});
+
+// -------------------------------------------------------------------- report
+
+el('copy').addEventListener('click', async () => {
+  const text = [`FUSE diagnostics — ${new Date().toISOString()}`, ...report].join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    (el('copy') as HTMLButtonElement).textContent = 'Copied';
+  } catch {
+    // clipboard is unavailable in some embeds — fall back to the console
+    console.log(text);
+    (el('copy') as HTMLButtonElement).textContent = 'Logged to console';
+  }
+});
+
+console.log('[diag] FUSE diagnostics ready', { appType: app.appType, embedded });

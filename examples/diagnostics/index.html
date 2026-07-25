@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>FUSE Diagnostics</title>
+    <style>
+      body { overflow: auto; }
+      .diag {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 24px 16px 64px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .diag h1 { font-size: 20px; margin: 0 0 4px; }
+      .diag h2 {
+        font-size: 11px;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: var(--text-disabled);
+        margin: 28px 0 8px;
+      }
+      .diag .sub { color: var(--text-disabled); margin: 0 0 8px; }
+      .card {
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-color);
+      }
+      .row:last-child { border-bottom: none; }
+      .row .k { flex: 0 0 190px; color: var(--text-disabled); }
+      .row .v { flex: 1; word-break: break-word; font-variant-numeric: tabular-nums; }
+      .chip {
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border-color);
+        color: var(--text-disabled);
+      }
+      .chip.pass { color: #21d48d; border-color: #21d48d; }
+      .chip.fail { color: #ff6b6b; border-color: #ff6b6b; }
+      .chip.warn { color: #ffca44; border-color: #ffca44; }
+      .controls { display: flex; gap: 8px; margin: 8px 0 0; flex-wrap: wrap; }
+      input[type=text] {
+        font-family: var(--font-family);
+        font-size: 14px;
+        color: var(--text-color);
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 8px 10px;
+        min-width: 220px;
+        outline: none;
+      }
+      input[type=text]:focus { border-color: var(--primary-color); }
+      /* base.css styles bare `button` at 2.2vh — scope ours so they match the page */
+      .diag button {
+        font-family: var(--font-family);
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text-color);
+        background: transparent;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+      .diag button:hover { background: var(--hover-bg-color); }
+      .diag button.primary {
+        background: var(--primary-color);
+        border-color: var(--primary-color);
+        color: var(--bg-color-solid);
+      }
+      .log {
+        margin: 0;
+        padding: 12px;
+        max-height: 320px;
+        overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        color: var(--text-disabled);
+      }
+      .log b { color: var(--text-color); font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div class="diag">
+      <h1>FUSE multiplayer diagnostics</h1>
+      <p class="sub">
+        Answers the three open questions for real-hardware play: does this build load,
+        can it reach the relay, and do launch monitor shots arrive?
+      </p>
+
+      <h2>Environment</h2>
+      <div class="card" id="env"></div>
+
+      <h2>Relay reachability</h2>
+      <div class="card" id="relay"></div>
+      <div class="controls">
+        <input type="text" id="relay-host" spellcheck="false" autocomplete="off">
+        <button class="primary" id="relay-test">Test relay</button>
+      </div>
+
+      <h2>Setup event (from the host app)</h2>
+      <div class="card" id="setup"></div>
+
+      <h2>Shots received</h2>
+      <div class="card">
+        <div class="row"><span class="k">Shots seen</span><span class="v" id="shot-count">0</span></div>
+        <div class="log" id="shot-log">Waiting for a swing…</div>
+      </div>
+
+      <div class="controls">
+        <button id="copy">Copy report</button>
+      </div>
+    </div>
+    <script type="module" src="diagnostics.js"></script>
+  </body>
+</html>
