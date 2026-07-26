@@ -2,6 +2,27 @@
 
 ---
 
+> ### 🏌️ Fork: remote multiplayer
+>
+> This branch adds **remote multiplayer** — two people in different houses, each
+> with their own launch monitor, playing one round shot by shot with live ball
+> flight on both screens. A full 9 holes has been played over the internet on OGS
+> Desktop with Square launch monitors. It also supports two local players sharing
+> one machine plus a third playing remotely.
+>
+> **Start here: [docs/MULTIPLAYER.md](./docs/MULTIPLAYER.md)** — what it does, how
+> it works, the wire protocol, and what's deliberately hacked around not
+> controlling OpenGolfSim's infrastructure.
+>
+> To play: [docs/HOSTING.md](./docs/HOSTING.md) (host) ·
+> [docs/PLAYING-WITH-A-FRIEND.md](./docs/PLAYING-WITH-A-FRIEND.md) (guest).
+> `MULTIPLAYER_PLAN.md` is the working log, including things tried and abandoned.
+>
+> Proof of concept, not production: see *Known gaps* and *What's deliberately
+> hacky* in the doc above.
+
+---
+
 FUSE (Fast Universal Simulator Engine) is [OpenGolfSim](https://opengolfsim.com/)'s lightweight 3D golf simulation and physics engine. Providing components and utilities for building fully featured golf simulator experiences in any WebGL-capable browser or device.
 
 Download and install [OpenGolfSim](https://opengolfsim.com) Desktop or Mobile, to see the engine in action, connect, and send shots your launch monitor.
