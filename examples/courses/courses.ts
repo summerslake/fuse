@@ -142,8 +142,6 @@ function launchShot(shot: OpenGolfSim.Shot) {
 
     // this is a real local shot, so GameSync should report its result
     gameContext.replayingRemoteShot = false;
-    // covers keyboard test shots too, which never reach app.on('shot')
-    removeMultiplayerButton();
     gameContext.shotData?.updateShotData(shot);
     gameContext.golfBall.launchShot(shot);
 
@@ -451,13 +449,6 @@ async function handleSetup(payload: any) {
   // the host app owns the player list here — real names, real club distances
   gameContext.playersFromHost = true;
 
-  const intent = takeLobbyIntent();
-  if (intent) {
-    // we reloaded out of a solo round to join a room; go straight back to it
-    openLobby(gameContext.gameData.courseUrl ?? '', new URLSearchParams(), intent);
-    return;
-  }
-
   // Launched from the Multiplayer tile: no course attached, so open the lobby
   // and let it pick one. Nothing is built until the roster is settled.
   if (isMultiplayerEntry()) {
@@ -466,7 +457,6 @@ async function handleSetup(payload: any) {
   }
 
   preLoad();
-  addMultiplayerButton();
 }
 
 /**
@@ -485,25 +475,7 @@ async function startMultiplayerEntry() {
     }
   }
   gameContext.gameData ??= { id: 'mp', courseUrl: '', gameMode: 2 };
-  openLobby('', params, undefined, await fetchCourses());
-}
-
-/** Remove every opt-in button, however many somehow got added. */
-function removeMultiplayerButton() {
-  document.querySelectorAll('.mp-opt-in').forEach((button) => button.remove());
-}
-
-/** Opt into multiplayer from a host-launched (solo) round. */
-function addMultiplayerButton() {
-  removeMultiplayerButton(); // never stack two
-  const button = document.createElement('button');
-  button.textContent = 'Multiplayer';
-  button.className = 'mp-opt-in';
-  button.addEventListener('click', () => {
-    removeMultiplayerButton();
-    openLobby(gameContext.gameData?.courseUrl ?? '', new URLSearchParams());
-  });
-  document.body.append(button);
+  openLobby('', params, await fetchCourses());
 }
 
 async function setupCourse() {
@@ -852,40 +824,11 @@ function recallLobby(): Partial<UILobbyJoinParams> {
 }
 
 /**
- * Joining has to happen before CourseGame is built, but a host-launched round is
- * already under way by the time you can click anything — so the lobby stashes
- * where you're going and reloads. Session-scoped: it must not outlive the window.
- */
-const LOBBY_INTENT_KEY = 'ogs.lobby.intent';
-
-function storeLobbyIntent(values: UILobbyJoinParams) {
-  try {
-    sessionStorage.setItem(LOBBY_INTENT_KEY, JSON.stringify(values));
-  } catch { /* nothing to do — the reload will just land back on solo */ }
-}
-/** Read the pending intent and clear it, so a later reload doesn't re-join. */
-function takeLobbyIntent(): UILobbyJoinParams | undefined {
-  try {
-    const raw = sessionStorage.getItem(LOBBY_INTENT_KEY);
-    sessionStorage.removeItem(LOBBY_INTENT_KEY);
-    return raw ? JSON.parse(raw) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * Show the multiplayer lobby: pick a room, watch players arrive, start the round
  * together, and leave again. Query params only seed the form (browser); a host
- * app supplies the players instead, and `resume` is a join we already committed
- * to before reloading.
+ * app supplies the players instead.
  */
-function openLobby(
-  courseUrl: string,
-  params: URLSearchParams,
-  resume?: UILobbyJoinParams,
-  courses?: UILobbyCourse[],
-) {
+function openLobby(courseUrl: string, params: URLSearchParams, courses?: UILobbyCourse[]) {
   const saved = recallLobby();
   const hostPlayers = gameContext.playersFromHost
     ? (gameContext.setupData?.players ?? []).map((player) => player.name)
@@ -898,35 +841,22 @@ function openLobby(
     // OGS Desktop sends High to everyone, including laptops that can't hold it
     defaultQuality: saved.quality ?? gameContext.setupData?.qualityLevel ?? QualityMode.Medium,
     defaults: {
-      name: resume?.name || params.get('name') || saved.name || '',
-      room: resume?.room || params.get('room') || saved.room || '',
-      server: resume?.server || params.get('server') || saved.server || defaultRelayHost(),
-      secret: resume?.secret || params.get('secret') || '',
+      name: params.get('name') || saved.name || '',
+      room: params.get('room') || saved.room || '',
+      server: params.get('server') || saved.server || defaultRelayHost(),
+      secret: params.get('secret') || '',
     },
   });
   gameContext.lobby = lobby;
   document.body.style.opacity = '1'; // preLoad normally does this, but that's post-Start
 
-  lobby.on('join', (values) => {
-    // A host-launched round is already loading behind this overlay; reload so we
-    // come back clean and can build the game from the server roster instead.
-    // The multiplayer entry has nothing loaded yet, so it needs no reload.
-    if (gameContext.playersFromHost && !resume && !isMultiplayerEntry()) {
-      storeLobbyIntent(values);
-      window.location.reload();
-      return;
-    }
-    joinRoom(values, courseUrl);
-  });
+  lobby.on('join', (values) => joinRoom(values, courseUrl));
   lobby.on('start', () => gameContext.net?.sendStart());
   lobby.on('leave', () => leaveRoom());
   lobby.open();
 
-  // Already committed (we reloaded to get here), or ?room= says "I know where
-  // I'm going" — either way, connect straight away.
-  if (resume) {
-    joinRoom(resume, courseUrl);
-  } else if (params.get('room') && lobby.values.name) {
+  // ?room= says "I know where I'm going" — connect straight away.
+  if (params.get('room') && lobby.values.name) {
     joinRoom(lobby.values, courseUrl);
   }
 }
@@ -1075,11 +1005,6 @@ function leaveRoom() {
 
 // listen for setup event from OpenGolfSim app
 app.on('setup', handleSetup);
-// Once a ball is struck the round is committed, so retire the multiplayer opt-in
-// (switching now would throw the round away). Registered BEFORE launchShot:
-// eventemitter3 runs listeners in order and stops at the first one that throws,
-// so this must not sit downstream of the shot-handling code.
-app.on('shot', removeMultiplayerButton);
 // listen for shot event from OpenGolfSim app
 app.on('shot', launchShot);
 
