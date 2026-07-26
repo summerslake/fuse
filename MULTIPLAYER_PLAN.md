@@ -1,6 +1,16 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- 🏌️ **IT WORKS. Full 9-hole round played over the internet, 2026-07-26.** Lake
+  and Brett, two houses, two launch monitors, start to finish with no
+  intervention and nothing to work around. That is the goal this plan was
+  written for; everything below is now improvement rather than construction.
+
+  Proven end-to-end in that round: OGS Desktop loading the host's build over the
+  internet, the injected Multiplayer tile, lobby + course pick + roster, real
+  Square shots on both ends, shot-by-shot away turns with honors, live
+  re-simulated ball flight on both screens, and scoring agreeing across clients
+  for all 9 holes.
 - ✅✅ **THE DESKTOP + SQUARE SPIKE PASSED** (2026-07-25, on real hardware).
   Every open question for real-hardware play is now answered green, measured in
   OGS Desktop v1.17.1 (Electron 43 / Chrome 150) against our own build:
@@ -162,10 +172,11 @@ real round on the Square. Everything below is toward that.
    launched round, which stashes the room in sessionStorage and reloads. Players
    and their real club distances now come from the host app's `setup` payload
    instead of `generateSetupData()`.
-2. **Real-world connectivity.** For Lake↔Brett over the internet: run the
-   standalone relay (`npm run server`, set `OGS_MP_SECRET`), port-forward its
-   port, and point Brett at `&server=<lake-ip>:<port>&secret=…`. Validate once
-   end-to-end. (The in-process vite relay is dev-only.)
+2. ✅ ~~**Real-world connectivity**~~ — **done 2026-07-26, a full 9-hole round.**
+   `npm run host` serves the build and the relay together; forward TCP 5173 and
+   8080; the guest launches Desktop with `OGS_APP_URL` pointed at the host and
+   needs no repo, no node, and no matching OpenGolfSim version. See
+   `docs/HOSTING.md` and `docs/PLAYING-WITH-A-FRIEND.md`.
 3. **Phase 5 — robustness.**
    - ✅ ~~Disconnect/rejoin~~ — done 2026-07-25 (protocol v4). `NetClient` keeps a
      `clientKey` in localStorage; a returning client reclaims the same
