@@ -55,21 +55,34 @@ Quit first with ⌘Q, or `pkill -9 -f "OpenGolfSim.app"`.
 
 ### Windows — PowerShell
 
+OpenGolfSim installs per-user via Squirrel, so it lives under `%LOCALAPPDATA%`.
+Check the executable's name first — it's one line:
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\opengolfsim_desktop" -Filter *.exe | Select-Object Name
+```
+
+Then launch it:
+
 ```powershell
 $env:OGS_APP_URL = "http://<HOST-IP>:5173"
-& "$env:LOCALAPPDATA\Programs\OpenGolfSim\OpenGolfSim.exe"
+& "$env:LOCALAPPDATA\opengolfsim_desktop\OpenGolfSim.exe"
 ```
 
 ### Windows — Command Prompt
 
 ```cmd
 set OGS_APP_URL=http://<HOST-IP>:5173
-"%LOCALAPPDATA%\Programs\OpenGolfSim\OpenGolfSim.exe"
+"%LOCALAPPDATA%\opengolfsim_desktop\OpenGolfSim.exe"
 ```
 
-If that path is wrong: right-click the OpenGolfSim shortcut → **Properties** →
-copy the **Target** field and use that instead. Make sure it's fully closed
-first, including the system tray.
+Use the executable in that folder's **root**, not the one inside `app-1.17.1\` —
+the versioned folder changes with every update, so a command pointing into it
+stops working the next time OpenGolfSim updates itself.
+
+If neither path exists, right-click the OpenGolfSim shortcut → **Properties** →
+copy the **Target** field. And make sure it's fully closed first, including the
+system tray — the variable is only read at startup.
 
 ## 3. Join
 
