@@ -74,33 +74,25 @@ row(env, 'Page protocol', window.location.protocol, httpsPage ? 'warn' : 'pass')
 row(env, 'Secure context', String(window.isSecureContext));
 row(env, 'User agent', navigator.userAgent);
 
-// Rapier compiles WASM, which a CSP without 'wasm-unsafe-eval' will block. The
-// AppBridge only signals success, so time it out rather than sit on "initializing".
-// Two separate things, and conflating them cost us a round trip: whether the
-// physics world actually exists, and whether `initialize()`'s callback fires.
-const worldRow = row(env, 'Physics world (app.world)', 'not created yet', 'pending');
-const worldTick = setInterval(() => {
-  if (!app.world) return;
-  setRow(worldRow, 'created — Rapier initialized fine', 'pass');
-  clearInterval(worldTick);
-}, 250);
-
-const rapierRow = row(env, 'app.initialize() callback', 'waiting…', 'pending');
-const rapierStarted = performance.now();
-let rapierReady = false;
+// FUSE no longer loads Rapier, so `initialize()` resolves immediately and this
+// row should turn green the moment the page runs. It stays because a stuck
+// callback is still the symptom that a bundle failed to evaluate at all.
+const initRow = row(env, 'app.initialize() callback', 'waiting…', 'pending');
+const initStarted = performance.now();
+let initFired = false;
 app.initialize(() => {
-  rapierReady = true;
-  setRow(rapierRow, `fired after ${((performance.now() - rapierStarted) / 1000).toFixed(1)}s`, 'pass');
+  initFired = true;
+  setRow(initRow, `fired after ${((performance.now() - initStarted) / 1000).toFixed(1)}s`, 'pass');
 });
 // Keep counting rather than declaring failure at a fixed moment — the question
 // is whether this is slow or genuinely stuck, and a static row can't say.
-const rapierTick = setInterval(() => {
-  if (rapierReady) return clearInterval(rapierTick);
-  const seconds = (performance.now() - rapierStarted) / 1000;
-  rapierRow.value.textContent = `still waiting… ${seconds.toFixed(0)}s`;
+const initTick = setInterval(() => {
+  if (initFired) return clearInterval(initTick);
+  const seconds = (performance.now() - initStarted) / 1000;
+  initRow.value.textContent = `still waiting… ${seconds.toFixed(0)}s`;
   if (seconds > 30) {
-    setRow(rapierRow, `never fired after ${seconds.toFixed(0)}s${app.world ? ' — but the physics world exists, so this is the ready event, not Rapier' : ''}`, 'fail');
-    clearInterval(rapierTick);
+    setRow(initRow, `never fired after ${seconds.toFixed(0)}s — the FUSE bundle never evaluated`, 'fail');
+    clearInterval(initTick);
   }
 }, 1000);
 
@@ -109,9 +101,9 @@ const rapierTick = setInterval(() => {
 if (app.appType === 'web') {
   row(env, 'Note', 'appType "web" — no host app detected. In a plain browser tab this is normal.');
 }
-// A CSP from the host app is the prime suspect when a socket or WASM compile
-// fails here — this reports the exact directive and the policy behind it, which
-// is the difference between "the relay is unreachable" and "we were forbidden".
+// A CSP from the host app is the prime suspect when the socket fails here —
+// this reports the exact directive and the policy behind it, which is the
+// difference between "the relay is unreachable" and "we were forbidden".
 const cspRow = row(env, 'CSP violations', 'none so far');
 let policyShown = false;
 document.addEventListener('securitypolicyviolation', (event) => {
@@ -122,22 +114,13 @@ document.addEventListener('securitypolicyviolation', (event) => {
   }
 });
 
-// AppBridge calls `rapier.init()` with no catch, so a WASM failure surfaces only
-// as an unhandled rejection — with no console in Desktop, that would be invisible.
+// There is no console inside Desktop, so anything thrown during startup would
+// otherwise be invisible — surface it on the page.
 const errorRow = row(env, 'Uncaught errors', 'none so far');
 window.addEventListener('error', (event) =>
   setRow(errorRow, `${event.message} (${event.filename}:${event.lineno})`, 'fail'));
 window.addEventListener('unhandledrejection', (event) =>
   setRow(errorRow, `unhandled rejection: ${event.reason}`, 'fail'));
-
-// Compile the 8-byte empty module: an instant, decisive answer on whether WASM
-// is permitted at all, independent of whatever Rapier is doing.
-try {
-  new WebAssembly.Module(new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]));
-  row(env, 'WASM compile', 'allowed', 'pass');
-} catch (err) {
-  row(env, 'WASM compile', `refused: ${err}`, 'fail');
-}
 
 // An https page has its ws:// blocked as mixed content — the relay would need TLS.
 if (httpsPage) {
@@ -274,12 +257,12 @@ const pageLoadedAt = performance.now();
 const setupRow = row(setup, 'setup event', 'waiting for the host app…', 'pending');
 
 /**
- * AppBridge only sends `{type:'ready'}` from setReady(), which runs *after*
- * Rapier initializes — so a stuck Rapier means the host app never hears that the
- * page is up, and (the suspicion) never arms the launch monitor. This button
- * sends it by hand to test that link without waiting on physics.
+ * AppBridge sends `{type:'ready'}` from setReady(), now straight from its
+ * constructor. If the host app never arms the launch monitor, the question is
+ * whether it heard that signal at all — this button re-sends it by hand to test
+ * that link on its own.
  */
-const readyRow = row(setup, 'ready signal to host', 'not sent — AppBridge only sends it once Rapier initializes');
+const readyRow = row(setup, 'ready signal to host', 'sent automatically on load — click to send again');
 el('send-ready').addEventListener('click', () => {
   app.sendMessage({ type: 'ready' });
   setRow(readyRow, `sent by hand at ${new Date().toLocaleTimeString()} — does the launch monitor arm now?`, 'pass');

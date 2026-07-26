@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { type CourseGame } from '@/courses/game';
+import { type CourseColliderType } from '@/courses/surfaces';
 import { type GolfBall } from '@/objects/golfBall';
 import { type NetClient } from './client';
 import { type ShotMessage } from './types';
@@ -52,8 +53,9 @@ export class GameSync {
       if (!golfBall.object) return;
       net.sendShotResult(game.activePlayer.id, {
         endPosition: golfBall.object.position.toArray() as [number, number, number],
-        surface: details.surface ? { type: details.surface.type } : undefined,
-        isHoled: details.isHoled,
+        surface: details.surface,
+        isHoled: details.isHoled === true,
+        isInWater: details.isInWater === true,
       });
     });
 
@@ -72,8 +74,9 @@ export class GameSync {
   applyShot({ playerId, result }: ShotMessage) {
     this.#game.applyShotResult(playerId, {
       endPosition: new THREE.Vector3().fromArray(result.endPosition),
-      surface: result.surface as { type?: any } | undefined,
+      surface: result.surface as CourseColliderType | undefined,
       isHoled: result.isHoled,
+      isInWater: result.isInWater,
     });
   }
 }

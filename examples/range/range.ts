@@ -30,7 +30,7 @@ import fairwayTexture from './textures/gen_fairway_tex.png?url';
 import fairwayMap from './textures/gen_fairway_map.png?url';
 import { PlayerState } from '@/courses/types';
 
-const sunColor = new THREE.Color('#fdf0d8');
+const sunColor = new THREE.Color('#fcfae9');
 const skyColor = new THREE.Color('#abd0db');
 const fogColor = new THREE.Color('#9bb0b7');
 const cloudColor = new THREE.Color('#ffffff');
@@ -115,7 +115,7 @@ async function setupWorld() {
 
 
 async function createGroundPlane() {
-  if (!app.world) throw new Error('Missing physics world. Did you call app.initialize() first?');
+  // if (!app.world) throw new Error('Missing physics world. Did you call app.initialize() first?');
   if (!gameContext.scene) throw new Error('Missing base scene');
   const rangeWidth = 500;
   const rangeHeight = 700;
@@ -248,7 +248,11 @@ async function setupRange() {
 
   gameContext.scene = new THREE.Scene();
   gameContext.scene.background = skyColor;
-  gameContext.lightGroup = new CourseLight({ color: sunColor });
+  gameContext.lightGroup = new CourseLight({
+    color: sunColor,
+    ambient: { enabled: true, intensity: 1.3 },
+    directional: { enabled: true, intensity: 1.3 },
+  });
   gameContext.scene.add(gameContext.lightGroup);
 
   gameContext.fog = new THREE.Fog(fogColor, 200, 1000);
@@ -298,9 +302,9 @@ async function setupRange() {
   gameContext.scene.add(gameContext.clouds.object);
   
   
-  if (!app.world) throw new Error('Missing physics world. Did you call app.initialize() first?');
+  // if (!app.world) throw new Error('Missing physics world. Did you call app.initialize() first?');
   if (!gameContext.setupData) throw new Error('Missing setupData');
-  gameContext.golfBall = new GolfBall(gameContext.scene, app.world, app.rapier, {
+  gameContext.golfBall = new GolfBall(gameContext.scene, {
     setupData: gameContext.setupData,
     clearTrail: 'start',
     groundMeshes: [gameContext.ground]
@@ -475,7 +479,12 @@ function animate(animDelta: number) {
 
 }
 // use this on load of page, with test data
-app.initialize(initializeDebug);
+app.initialize(() => {
+  if (app.appType === 'web') {
+    initializeDebug();
+  }
+});
+
 // sent by OpenGolfSim Desktop/Mobile apps
 app.on('setup', initializeSetup);
 // sent by OpenGolfSim Desktop/Mobile apps

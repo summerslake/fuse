@@ -2,13 +2,19 @@ import * as THREE from 'three';
 import { type CourseLoader } from './loader';
 import { Hole, PlayerState } from './types';
 import { type GolfBall } from '@/objects/golfBall';
-import { type CourseSurfaceProperties } from '@/courses/surfaces';
+import { type CourseColliderType } from '@/courses/surfaces';
 import EventEmitter from 'eventemitter3';
 import { CoursePlayer } from './player';
 import { DefaultGimmeDistances } from '@/utils/data';
+import { ShotEndEvent } from '@/physics/ballPhysics';
 
 // how far away from the tee box position to auto-aim at the pin instead of aim point
 const AIMPOINT_THRESHOLD = 25;
+// drop search tuning
+const DROP_RING_STEP = 1;        // meters between sampling rings
+const DROP_RING_SAMPLES = 12;    // angular samples per ring
+const DROP_RAY_HEIGHT = 10;      // cast downward from this height above candidate
+const INVALID_DROP_SURFACES = ['plane_river', 'plane_lake', 'water', 'bunker', 'green'];
 
 interface CourseGameEvents {
   nextShot: (player: CoursePlayer) => void;
@@ -36,24 +42,29 @@ type CourseGameOptions = {
   networked?: boolean,
 }
 
+/** How a player resolves a ball that finished in a water hazard. */
+export type HazardAction = 'drop' | 'rehit' | 'mulligan';
+
 /**
  * The outcome of a completed shot expressed as plain data — no reference to the
  * local `GolfBall`. This is what `applyShotResult` consumes, so the same scoring
  * path serves both a locally simulated shot and one replayed from the network.
- * `surface` is intentionally only `{ type }` — that's all scoring reads, and it
- * keeps the network payload small (a full CourseSurfaceProperties also satisfies
- * this).
+ * Mirrors the scoring-relevant fields of `ShotEndEvent`, minus the ball.
  */
 export type ShotResultInput = {
   endPosition: THREE.Vector3,
-  surface?: Pick<CourseSurfaceProperties, 'type'>,
+  surface?: CourseColliderType,
   isHoled: boolean,
+  /** ball finished in a lake/river — unplayable, resolved via drop/rehit/mulligan */
+  isInWater?: boolean,
 }
 
 /** What applyShotResult reports back to the caller. */
 export type ShotResultOutcome = {
   /** true if this shot completed the player's hole (holed out or green auto-putt) */
   holeFinished: boolean,
+  /** true if the ball is in a hazard: the turn has NOT moved, a HazardAction is owed */
+  awaitingHazard: boolean,
 }
 
 export class CourseGame extends EventEmitter<CourseGameEvents> {
@@ -117,7 +128,8 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
         this.applyShotResult(this.activePlayer.id, {
           endPosition: this.golfBall.object.position.clone(),
           surface: details.surface,
-          isHoled: details.isHoled,
+          isHoled: details.isHoled === true,
+          isInWater: details.isInWater === true,
         });
       });
     }
@@ -198,7 +210,12 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     player.scorecard.set(holeKey, newHoleScore);
 
     if (endOfHole) {
-      player.toPar = this.#orderedHoles.slice(0, this.currentHoleIndex + 1).reduce((prev, hole) => {
+      // Sum only the holes this player has actually finished. (Indexing by
+      // currentHoleIndex would charge them par for holes still in progress —
+      // and under shot-by-shot play a player can hole out while others are
+      // still on the hole.)
+      player.toPar = this.#orderedHoles.reduce((prev, hole) => {
+        if (!player.hasFinishedHole(hole.number)) { return prev; }
         const s = player.scorecard.get(`${hole.number}`);
         const diff = (s || 0) - hole.par;
         return prev + diff;
@@ -219,10 +236,12 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
    * deterministic from the shot data + course, so every networked client
    * computes the identical turn without any server arbitration.
    *
+   * A shot into water is the one case that does NOT hand off the turn: the ball
+   * is unplayable, so the shot isn't finished until the shooter picks drop /
+   * rehit / mulligan, and each of those runs the turn rules itself.
+   *
    * The shooter is resolved from `playerId` (not assumed to be activePlayer) so
    * a late/echoed network result still scores the right player.
-   *
-   * @returns whether this shot holed out / finished the player's hole.
    */
   applyShotResult(
     playerId: string,
@@ -246,15 +265,21 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     player.previousStart.copy(player.start);
 
     let holeFinished = false;
+    let awaitingHazard = false;
     if (!this.practiceMode) {
       player.start.copy(result.endPosition);
       // hack greens as done
-      if (result.isHoled) {
+      if (result.isInWater) {
+        // Unplayable lie: the stroke counts, but the shot isn't resolved and
+        // the turn does not move. The hazard dialog is up for the shooter, and
+        // drop/rehit/mulligan finishes the shot.
+        awaitingHazard = true;
+      } else if (result.isHoled) {
         holeFinished = true;
         console.log(`Ball in hole! End hole`);
         this._addStrokes(player, 0, true);
         player.disabled = true;
-      } else if (result.surface?.type === 'green' && !this.puttingEnabled) {
+      } else if (result.surface === 'green' && !this.puttingEnabled) {
         holeFinished = true;
         // total score
         // TODO: change to add auto-putt number
@@ -274,12 +299,24 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       }
     }
 
-    // Shot-by-shot: recompute who's up after every shot.
+    if (awaitingHazard) {
+      return { holeFinished: false, awaitingHazard: true };
+    }
+    return this.#advanceTurn(holeFinished);
+  }
+
+  /**
+   * Hand the turn to whoever is up now and announce it. Every path that
+   * completes a shot ends here — a normal shot, and each hazard resolution —
+   * so the away rule is applied in exactly one place and every client derives
+   * the same next player from the same state.
+   */
+  #advanceTurn(holeFinished: boolean): ShotResultOutcome {
     if (this.players.every(p => p.disabled)) {
       // everyone holed out this hole -> next hole (or the round is over)
       if (!this._advanceHole()) {
         this.emit('roundEnded');
-        return { holeFinished };
+        return { holeFinished, awaitingHazard: false };
       }
     }
     this.currentPlayerIndex = this.#findAwayPlayer();
@@ -288,7 +325,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     this.updateAimPoint(this.activePlayer.start);
     this.emit('nextShot', this.activePlayer);
 
-    return { holeFinished };
+    return { holeFinished, awaitingHazard: false };
   }
 
   switchHole(hole: Hole) {
@@ -419,4 +456,110 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     // }
   }
 
+  /**
+   * Resolve a shot that finished in a hazard, and hand the turn on.
+   *
+   * Every one of these mutates the scorecard and a player's lie, so in
+   * multiplayer they must run on every client, not just the shooter's — hence
+   * the explicit `playerId` and the total absence of `golfBall` reads. The
+   * ball's resting place is already in `player.start` (applyShotResult put it
+   * there before returning `awaitingHazard`), and the drop search raycasts the
+   * course, which every client has loaded identically. So the outcome is
+   * derived, not transmitted: the wire only carries which button was pressed.
+   */
+  applyHazardAction(playerId: string, action: HazardAction): ShotResultOutcome {
+    const player = this.players.find(p => p.id === playerId);
+    if (!player) {
+      throw new Error(`applyHazardAction: no player with id ${playerId}`);
+    }
+    if (!player.previousStart) {
+      console.warn(`applyHazardAction: ${playerId} has no previous position`);
+      return { holeFinished: false, awaitingHazard: true };
+    }
+
+    if (action === 'drop') {
+      const dropPoint = player.pin
+        ? this._findDropPoint(player.start.clone(), player.pin, player.previousStart)
+        : null;
+      if (dropPoint) {
+        player.start.copy(dropPoint);
+      } else {
+        // no valid surface found: stroke and distance
+        console.warn('No valid drop point found, returning to previous position');
+        player.start.copy(player.previousStart);
+      }
+      this._addStrokes(player, 1); // penalty stroke
+    } else {
+      // rehit and mulligan both play again from the previous spot; a mulligan
+      // additionally erases the stroke that put the ball in the water.
+      player.start.copy(player.previousStart);
+      if (action === 'mulligan') {
+        this._addStrokes(player, -1);
+      }
+    }
+
+    if (this.localPlayerIds.has(playerId)) {
+      this.golfBall.isShotActive = false;
+    }
+    return this.#advanceTurn(false);
+  }
+
+  rehit() {
+    return this.applyHazardAction(this.activePlayer.id, 'rehit');
+  }
+
+  mulligan() {
+    return this.applyHazardAction(this.activePlayer.id, 'mulligan');
+  }
+
+  drop() {
+    return this.applyHazardAction(this.activePlayer.id, 'drop');
+  }
+
+  _findDropPoint(ballPos: THREE.Vector3, pin: THREE.Vector3, prev: THREE.Vector3): THREE.Vector3 | null {
+    const meshes = this.course.getGroundMeshes();
+    const raycaster = new THREE.Raycaster();
+    raycaster.firstHitOnly = true; // requires three-mesh-bvh acceleration (already in use)
+
+    const ballToPin = ballPos.distanceTo(pin);
+    const ballToPrev = ballPos.distanceTo(prev);
+    const maxRadius = ballToPrev; // beyond this, previousStart is strictly better
+
+    const origin = new THREE.Vector3();
+    const down = new THREE.Vector3(0, -1, 0);
+
+    for (let radius = DROP_RING_STEP; radius <= maxRadius; radius += DROP_RING_STEP) {
+      let best: THREE.Vector3 | null = null;
+      let bestPinDist = Infinity;
+
+      for (let i = 0; i < DROP_RING_SAMPLES; i++) {
+        const angle = (i / DROP_RING_SAMPLES) * Math.PI * 2;
+        origin.set(
+          ballPos.x + Math.cos(angle) * radius,
+          ballPos.y + DROP_RAY_HEIGHT,
+          ballPos.z + Math.sin(angle) * radius
+        );
+
+        raycaster.set(origin, down);
+        const hit = raycaster.intersectObjects(meshes, false)[0];
+        if (!hit) continue;
+
+        const surface = hit.object.userData?.surface;
+        if (!surface || INVALID_DROP_SURFACES.includes(surface)) continue;
+
+        const pinDist = hit.point.distanceTo(pin);
+        if (pinDist < ballToPin) continue;              // never closer to the hole
+        if (hit.point.distanceTo(prev) > ballToPrev) continue; // stay on the near side
+
+        if (pinDist < bestPinDist) {
+          bestPinDist = pinDist;
+          best = hit.point.clone();
+        }
+      }
+
+      // first ring with any valid hit wins (nearest to ball), tie-broken toward pin
+      if (best) return best;
+    }
+    return null;
+  }  
 }

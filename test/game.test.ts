@@ -57,8 +57,8 @@ function makeGame(playerIds = ['p1', 'p2'], localPlayerIds?: string[]) {
   });
 }
 
-const fairway = (z: number) => ({ endPosition: V(0, 0, z), surface: { type: 'fairway' } as any, isHoled: false });
-const green = (z: number) => ({ endPosition: V(0, 0, z), surface: { type: 'green' } as any, isHoled: false });
+const fairway = (z: number) => ({ endPosition: V(0, 0, z), surface: 'fairway' as any, isHoled: false });
+const green = (z: number) => ({ endPosition: V(0, 0, z), surface: 'green' as any, isHoled: false });
 const player = (g: CourseGame, id: string) => g.players.find((p) => p.id === id)!;
 /** Play a shot for whoever is currently up (mirrors real turn-gated play). */
 const play = (g: CourseGame, result: any) => g.applyShotResult(g.activePlayer.id, result);
@@ -92,7 +92,7 @@ describe('CourseGame — shot-by-shot away rotation', () => {
 
   it('holing out finalizes the shooter and hands off to the remaining player', () => {
     // p1 aces the par 3 on the tee shot
-    play(g, { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true });
+    play(g, { endPosition: V(0, 0, 150), surface: 'green' as any, isHoled: true });
     const p1 = player(g, 'p1');
     expect(p1.scorecard.get('1')).toBe(1);
     expect(p1.toPar).toBe(-2);                       // 1 on a par 3
@@ -147,7 +147,7 @@ describe('CourseGame — shot-by-shot away rotation', () => {
 });
 
 describe('CourseGame — honors off the tee', () => {
-  const holeOut = { endPosition: V(0, 0, 150), surface: { type: 'green' } as any, isHoled: true };
+  const holeOut = { endPosition: V(0, 0, 150), surface: 'green' as any, isHoled: true };
 
   /** Walk hole 1 so p1 scores `p1Strokes` and p2 scores `p2Strokes`. */
   function playHoleOne(g: CourseGame, p1Strokes: number, p2Strokes: number) {

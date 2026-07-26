@@ -6,7 +6,7 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** One line per room event, so a host can see who's actually in a room. */
 function logRoom(room, message) {

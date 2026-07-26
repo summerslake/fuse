@@ -107,7 +107,7 @@ async function shoot(
   const waits = [once(a.net, 'shot'), once(b.net, 'shot')];
   shooter.ball.object.position.fromArray(opts.pos);
   shooter.ball.emit('shotEnded', {
-    surface: opts.surface ? { type: opts.surface } : undefined,
+    surface: opts.surface,
     isHoled: !!opts.isHoled,
   });
   await Promise.all(waits);
@@ -199,11 +199,11 @@ describe('GameSync — isReplay guard', () => {
     let replaying = true;
     new GameSync(game, fakeNet, ball, { isReplay: () => replaying });
 
-    ball.emit('shotEnded', { surface: { type: 'green' }, isHoled: false });
+    ball.emit('shotEnded', { surface: 'green', isHoled: false });
     expect(sent.length).toBe(0); // replay -> suppressed
 
     replaying = false;
-    ball.emit('shotEnded', { surface: { type: 'green' }, isHoled: false });
+    ball.emit('shotEnded', { surface: 'green', isHoled: false });
     expect(sent).toEqual([{ id: 'me' }]); // real local shot -> sent
   });
 });

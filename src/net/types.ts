@@ -5,7 +5,7 @@
  * Keep PROTOCOL_VERSION in sync with server/relay.js.
  */
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** A roster player as the server tracks it: a Player with a namespaced id + owner. */
 export interface RosterPlayer {
@@ -32,9 +32,11 @@ export interface RoomSnapshot {
 export interface NetShotResult {
   /** ball resting position [x, y, z] */
   endPosition: [number, number, number];
-  /** surface the ball came to rest on; only `type` is needed for scoring */
-  surface?: { type?: string };
+  /** surface type the ball came to rest on, e.g. 'green' — that's all scoring reads */
+  surface?: string;
   isHoled: boolean;
+  /** ball finished in water: the shooter owes a HazardMessage before play continues */
+  isInWater?: boolean;
 }
 
 /**
