@@ -175,9 +175,9 @@ for it to act on.
   left, since the turn still passes to them and the round stalls.
 - **Live roster changes after the round starts are ignored** (a consequence of
   the same thing).
-- **There is only one FUSE course.** Mountain Vista is the only `gameMode: 2`
-  WebGL entry in the catalog, and the published course pipeline targets Unity
-  asset bundles, so there's no way to make another.
+- **Only one FUSE course exists today.** Mountain Vista is the only `gameMode: 2`
+  WebGL entry in the public catalog, so every round is played there. Not a
+  multiplayer problem, and course tooling is moving independently of this.
 
 ---
 
