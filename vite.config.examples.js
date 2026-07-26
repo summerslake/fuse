@@ -143,6 +143,49 @@ async function startRelay() {
   }
 }
 
+/**
+ * Startup banner. Prints the command to launch your own Desktop against this
+ * server, and — since a remote guest needs an address you can't see from the
+ * Local/Network lines — looks up the public IP and prints the exact command to
+ * send them.
+ */
+function printBanner(server) {
+  const port = server.config.preview?.port ?? server.config.server?.port ?? 5173;
+  const _print = server.printUrls.bind(server);
+  server.printUrls = () => {
+    console.log('\n    FUSE Examples running\n');
+    _print();
+    // NB: use `open --env`, not a direct binary launch — running the executable
+    // from a terminal loses the bundle's TCC grants, and the Square plugin then
+    // can't reach Bluetooth ("Noble powered on" timeout).
+    console.log(
+      `    You:    open --env OGS_APP_URL=http://localhost:${port} -a "/Applications/OpenGolfSim.app"` +
+        (process.env.OGS_DIAG === '1'
+          ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page'
+          : '')
+    );
+    printGuestCommand(port);
+  };
+}
+
+/** Look up the public IP so you can tell a remote guest where to point. */
+async function printGuestCommand(port) {
+  try {
+    const response = await fetch('https://ifconfig.me/ip', { signal: AbortSignal.timeout(4000) });
+    const ip = (await response.text()).trim();
+    if (!/^[0-9a-fA-F.:]+$/.test(ip)) throw new Error(`unexpected response`);
+    console.log(
+      `    Guest:  open --env OGS_APP_URL=http://${ip}:${port} -a "/Applications/OpenGolfSim.app"\n` +
+        `            (needs TCP ${port} and 8080 forwarded to this machine)\n`
+    );
+  } catch (err) {
+    console.log(
+      `    Guest:  public IP lookup failed (${err.message}) — LAN play is unaffected;\n` +
+        '            use the Network address above.\n'
+    );
+  }
+}
+
 export default defineConfig({
   root: 'examples',
   base: './',
@@ -174,22 +217,9 @@ export default defineConfig({
   plugins: [
     {
       name: 'custom-cli-message',
-      configureServer(server) {
-        const _print = server.printUrls;
-        server.printUrls = () => {
-          console.log('\n    FUSE Examples running\n');
-          _print();
-          // NB: use `open --env`, not a direct binary launch — running the
-          // executable from a terminal loses the bundle's TCC grants, and the
-          // Square plugin then can't reach Bluetooth ("Noble powered on" timeout).
-          console.log(
-            `    OGS Desktop:  open --env OGS_APP_URL=http://localhost:${server.config.server.port ?? 5173} -a "/Applications/OpenGolfSim.app"` +
-              (process.env.OGS_DIAG === '1'
-                ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page\n'
-                : '\n    (set OGS_DIAG=1 to serve the diagnostics page instead of the game)\n')
-          );
-        };
-      },
+      configureServer: printBanner,
+      // `npm run host` runs preview, which never got the banner at all
+      configurePreviewServer: printBanner,
     },
     {
       /**

@@ -48,8 +48,24 @@ Without it, anyone who can reach the relay can join your room and inject shots.
 
 ```
 Multiplayer relay: ws://localhost:8080
-➜  Local:    http://localhost:5173/
-➜  Network:  http://192.168.1.42:5173/     ← this line must be there
+➜  Local:   http://localhost:5173/
+➜  Network: http://192.168.1.42:5173/      ← this line must be there
+    You:    open --env OGS_APP_URL=http://localhost:5173 -a "/Applications/OpenGolfSim.app"
+    Guest:  open --env OGS_APP_URL=http://203.0.113.7:5173 -a "/Applications/OpenGolfSim.app"
+```
+
+The **Guest** line is built from your public IP — send it as-is to whoever is
+joining over the internet. On a LAN, hand them the **Network** address instead.
+
+While you play, the relay logs each room to this terminal, so you can see who is
+actually connected:
+
+```
+[room garage] created  —  course mtnvista-eztree-v3.glb
+[room garage] joined: Lake  —  Lake
+[room garage] joined: Brett  —  Lake, Brett
+[room garage] round started (2 players)  —  Lake, Brett
+[room garage] a player disconnected  —  Lake, Brett (away)
 ```
 
 No `Network:` line means it's bound to localhost only and nobody else can reach

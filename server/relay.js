@@ -8,6 +8,11 @@ import { Room } from './room.js';
  */
 export const PROTOCOL_VERSION = 4;
 
+/** One line per room event, so a host can see who's actually in a room. */
+function logRoom(room, message) {
+  console.log(`    [room ${room.code}] ${message}  —  ${room.describe()}`);
+}
+
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CLIENTS_PER_ROOM = 8;
 /** How long a started room keeps everyone's slots after the last one drops. */
@@ -76,6 +81,7 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         // Anyone in the lobby can start the round; the roster is frozen from here.
         if (room.started) return;
         room.started = true;
+        logRoom(room, `round started (${room.roster.length} players)`);
         room.broadcast({ type: 'started', roster: room.roster });
         break;
       }
@@ -119,6 +125,7 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
       }
       room = new Room(msg.roomCode, msg.courseUrl);
       rooms.set(msg.roomCode, room);
+      console.log(`    [room ${msg.roomCode}] created  —  course ${msg.courseUrl.split('/').pop()}`);
     } else if (msg.courseUrl && room.courseUrl && msg.courseUrl !== room.courseUrl) {
       send(socket, {
         type: 'error',
@@ -136,6 +143,7 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
       conn.roomCode = msg.roomCode;
       conn.joined = true;
       room.resumeClient(existing.clientId, socket);
+      logRoom(room, `${existing.client.playerIds.length === 1 ? 'player' : 'players'} reconnected`);
 
       send(socket, {
         type: 'joined',
@@ -167,7 +175,8 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
     conn.clientId = clientId;
     conn.roomCode = msg.roomCode;
     conn.joined = true;
-    room.addClient(clientId, socket, msg.players, msg.clientKey);
+    const joined = room.addClient(clientId, socket, msg.players, msg.clientKey);
+    logRoom(room, `joined: ${joined.map((p) => p.name).join(', ')}`);
 
     send(socket, { type: 'joined', clientId, room: room.snapshot() });
     room.broadcast(room.rosterMessage());
@@ -185,8 +194,10 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
       // about to come back, so hold the slots for a while before giving up.
       if (!room.started) {
         rooms.delete(conn.roomCode);
+        console.log(`    [room ${conn.roomCode}] closed (everyone left the lobby)`);
         return;
       }
+      logRoom(room, 'everyone disconnected — holding the round for 5 minutes');
       clearTimeout(room.cleanupTimer);
       room.cleanupTimer = setTimeout(() => {
         if (room.liveClientCount === 0) rooms.delete(conn.roomCode);
@@ -194,6 +205,7 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
       room.cleanupTimer.unref?.(); // never hold the process open for this
       return;
     }
+    logRoom(room, 'a player disconnected');
     room.broadcast(room.rosterMessage());
   }
 

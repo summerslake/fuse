@@ -88,6 +88,15 @@ export class Room {
     this.roster = this.roster.filter((p) => p.ownerId !== clientId);
   }
 
+  /** Who's in the room right now, for logging. Marks anyone disconnected. */
+  describe() {
+    if (!this.roster.length) return 'empty';
+    const live = this.clients;
+    return this.roster
+      .map((p) => (live.get(p.ownerId)?.alive ? p.name : `${p.name} (away)`))
+      .join(', ');
+  }
+
   /** Connected clients only — a disconnected slot is still in `clients`. */
   get liveClientCount() {
     let count = 0;
