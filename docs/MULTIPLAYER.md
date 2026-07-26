@@ -177,7 +177,10 @@ for it to act on.
   the same thing).
 - **Only one FUSE course exists today.** Mountain Vista is the only `gameMode: 2`
   WebGL entry in the public catalog, so every round is played there. Not a
-  multiplayer problem, and course tooling is moving independently of this.
+  multiplayer problem: OpenGolfSim's
+  [Meshery](https://github.com/OpenGolfSim/course-meshery-tool) exports FUSE GLBs
+  directly (`.GLB (Fuse)` is the only enabled format in its export dialog), so
+  the pipeline exists and is moving independently of this work.
 
 ---
 

@@ -233,6 +233,26 @@ real round on the Square. Everything below is toward that.
    - Watch the edge: leaving *while it's your turn* must hand the turn on, and
      leaving as the last remaining player should end the round rather than
      leave one client alone in a room it can't finish.
+4d. **Explore Meshery for making our own FUSE courses** (parked 2026-07-26; the
+   ceiling on this being fun is that Mountain Vista is the only FUSE course).
+   **There is a path, contrary to an earlier note here.**
+   [`course-meshery-tool`](https://github.com/OpenGolfSim/course-meshery-tool)
+   exports FUSE GLBs directly: its export dialog offers `.GLB (Fuse)` as the only
+   enabled format (the `.OBJ (Unity)` option is commented out), and
+   `src/lib/export/gltf.js` writes exactly what `CourseLoader` reads —
+   `hole_group` and `waypoint` nodes, per-layer `surface`, `courseSize`,
+   `sceneSettings`, and textures tagged `course_map` / `tree_mask` / `blend_map`
+   plus river flow maps. It also has a `src/fuse/` preview and generates the
+   minimap itself.
+   - Pipeline: SVG layout (Inkscape + their palette) + heightmap (from
+     `course-terrain-tool`, real lidar) → Meshery → `.glb`.
+   - Caveat: that export is on `main`, and the newest release is v1.4.1 from
+     February — so run it from source (`npm install && npm start`, it's Electron).
+   - The Unity asset-bundle pipeline in the public docs is the *other* branch of
+     this, for the native simulator. Community Unity courses aren't directly
+     convertible, but anyone holding the SVG + heightmap source could re-export.
+   - First test: build something rough and confirm it loads in our multiplayer
+     build. Hosting is trivial — the lobby's course list is just a JSON catalog.
 4c. **Known visual bug: trees render as black squares on Low quality**
    (2026-07-25, seen on a second machine). Only at Low. First theory — the
    low-tier batch material swap losing node properties under WebGPU — was wrong;
