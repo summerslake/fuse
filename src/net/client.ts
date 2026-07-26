@@ -7,6 +7,8 @@ import {
   type RosterMessage,
   type ShotMessage,
   type LaunchMessage,
+  type HazardMessage,
+  type HazardAction,
   type StartedMessage,
   type NetShotResult,
   type NetShotLaunch,
@@ -61,6 +63,8 @@ interface NetClientEvents {
   shot: (msg: ShotMessage) => void;
   /** a player just swung — fly the same shot live (re-simulate) */
   launch: (msg: LaunchMessage) => void;
+  /** a player resolved a ball in the water — apply it on every client */
+  hazard: (msg: HazardMessage) => void;
   /** the lobby closed — the roster is final, build the game from it */
   started: (msg: StartedMessage) => void;
   /** server-sent error (bad secret, version mismatch, courseUrl mismatch, …) */
@@ -78,7 +82,11 @@ interface NetClientEvents {
 export class NetClient extends EventEmitter<NetClientEvents> {
   url: string;
   clientId?: string;
-  /** Shots applied so far — what the relay replays from after a reconnect. */
+  /**
+   * State-changing events applied so far — shots and hazard resolutions alike.
+   * This is the resume point the relay replays from, so it must count every
+   * event the log holds, not just the shots.
+   */
   shotsSeen = 0;
   readonly clientKey: string;
   #join: NetClientJoinParams;
@@ -150,6 +158,11 @@ export class NetClient extends EventEmitter<NetClientEvents> {
       case 'launch':
         this.emit('launch', msg);
         break;
+      case 'hazard':
+        // counted alongside shots — it is in the same replay log
+        this.shotsSeen++;
+        this.emit('hazard', msg);
+        break;
       case 'started':
         this.emit('started', msg);
         break;
@@ -184,6 +197,11 @@ export class NetClient extends EventEmitter<NetClientEvents> {
   /** Announce a swing so other clients can fly it live (before it lands). */
   sendShotLaunch(playerId: string, launch: NetShotLaunch) {
     this.#send({ type: 'shot_launch', playerId, launch });
+  }
+
+  /** Report how a ball in the water was played. Everyone recomputes the rest. */
+  sendHazardAction(playerId: string, action: HazardAction) {
+    this.#send({ type: 'hazard_action', playerId, action });
   }
 
   /** Close the lobby and start the round for everyone in the room. */

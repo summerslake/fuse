@@ -89,6 +89,13 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
    * is the same point. Starts as roster order.
    */
   #honors: string[];
+  /**
+   * Who owes a hazard resolution, if anyone. Also the guard that makes applying
+   * one exactly-once: a duplicate `hazard` message (a double-tapped button, a
+   * reconnect replaying an event we already had) would otherwise stack a second
+   * penalty stroke on one client and desync the round.
+   */
+  #awaitingHazardFor: string | null = null;
   // #playerData: Map<string, PlayerState>;
 
   constructor(course: CourseLoader, golfBall: GolfBall, options: CourseGameOptions) {
@@ -300,6 +307,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     }
 
     if (awaitingHazard) {
+      this.#awaitingHazardFor = player.id;
       return { holeFinished: false, awaitingHazard: true };
     }
     return this.#advanceTurn(holeFinished);
@@ -472,10 +480,17 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     if (!player) {
       throw new Error(`applyHazardAction: no player with id ${playerId}`);
     }
+    if (this.#awaitingHazardFor !== playerId) {
+      // Nothing is owed (or it's owed by someone else) — this is a duplicate or
+      // a stale replay. Applying it would add a phantom penalty stroke.
+      console.warn(`applyHazardAction: ${playerId} does not owe a hazard resolution`);
+      return { holeFinished: false, awaitingHazard: this.#awaitingHazardFor !== null };
+    }
     if (!player.previousStart) {
       console.warn(`applyHazardAction: ${playerId} has no previous position`);
       return { holeFinished: false, awaitingHazard: true };
     }
+    this.#awaitingHazardFor = null;
 
     if (action === 'drop') {
       const dropPoint = player.pin

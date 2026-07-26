@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { type CourseGame } from '@/courses/game';
+import EventEmitter from 'eventemitter3';
+import { type CourseGame, type HazardAction } from '@/courses/game';
 import { type CourseColliderType } from '@/courses/surfaces';
 import { type GolfBall } from '@/objects/golfBall';
 import { type NetClient } from './client';
-import { type ShotMessage } from './types';
+import { type ShotMessage, type HazardMessage } from './types';
 
 /**
  * Wires a networked CourseGame to a NetClient for SCORING (the authoritative
@@ -36,11 +37,21 @@ export interface GameSyncOptions {
   isReplay?: () => boolean;
 }
 
-export class GameSync {
+export interface GameSyncEvents {
+  /**
+   * A ball finished in the water. The turn is parked on `playerId` until they
+   * choose; `isLocal` says whether that choice is ours to make (i.e. whether to
+   * put the hazard dialog up on this screen).
+   */
+  hazard: (playerId: string, isLocal: boolean) => void;
+}
+
+export class GameSync extends EventEmitter<GameSyncEvents> {
   #game: CourseGame;
   #net: NetClient;
 
   constructor(game: CourseGame, net: NetClient, golfBall: GolfBall, opts: GameSyncOptions = {}) {
+    super();
     this.#game = game;
     this.#net = net;
 
@@ -62,6 +73,10 @@ export class GameSync {
     // 2. Server echoed a shot (local or remote) -> apply on every client. This
     //    both scores it and advances the turn (deterministically, same on all).
     net.on('shot', (msg) => this.applyShot(msg));
+
+    // 3. Server echoed a hazard resolution -> apply on every client, same as a
+    //    shot. Including our own: one path, and the log stays the whole truth.
+    net.on('hazard', (msg) => this.applyHazard(msg));
   }
 
   /**
@@ -72,11 +87,37 @@ export class GameSync {
    * round exactly, because scoring and turn order are deterministic.
    */
   applyShot({ playerId, result }: ShotMessage) {
-    this.#game.applyShotResult(playerId, {
+    const outcome = this.#game.applyShotResult(playerId, {
       endPosition: new THREE.Vector3().fromArray(result.endPosition),
       surface: result.surface as CourseColliderType | undefined,
       isHoled: result.isHoled,
       isInWater: result.isInWater,
     });
+    if (outcome.awaitingHazard) {
+      // Nobody's turn advanced. Whoever owns this player has to answer, and
+      // announcing it here (rather than off the local ball's shotEnded) means
+      // the prompt is driven by the same echo everyone else scored from — so a
+      // remote player's splash never puts the dialog on our screen.
+      this.emit('hazard', playerId, this.#game.localPlayerIds.has(playerId));
+    }
+  }
+
+  /**
+   * Play our ball out of the water. Sends only — like a shot, it takes effect
+   * on the echo, so this client applies it at the same point in the log as
+   * everyone else and there is no window where our game is a move ahead.
+   */
+  resolveHazard(action: HazardAction) {
+    const playerId = this.#game.activePlayer.id;
+    if (!this.#game.localPlayerIds.has(playerId)) {
+      console.warn(`resolveHazard: ${playerId} is not ours to play`);
+      return;
+    }
+    this.#net.sendHazardAction(playerId, action);
+  }
+
+  /** Apply one hazard resolution from the wire. Same replay contract as applyShot. */
+  applyHazard({ playerId, action }: HazardMessage) {
+    this.#game.applyHazardAction(playerId, action);
   }
 }

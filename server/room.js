@@ -22,9 +22,12 @@ export class Room {
     /** true once someone has hit Start; late joiners are turned away */
     this.started = false;
     /**
-     * Every shot broadcast in this room, in order. A client that drops and comes
-     * back replays what it missed from here — otherwise its scorecard and turn
-     * order diverge from everyone else's, silently.
+     * Every state-changing event broadcast in this room, in order: shots, and
+     * the hazard resolutions between them. A client that drops and comes back
+     * replays what it missed from here — otherwise its scorecard and turn order
+     * diverge from everyone else's, silently. Hazard events belong in the same
+     * log as shots, not a separate one: replaying a drop out of order puts the
+     * ball somewhere nobody else has it.
      */
     this.shotLog = [];
   }
@@ -127,7 +130,7 @@ export class Room {
   }
 
   broadcast(msg) {
-    if (msg.type === 'shot') this.shotLog.push(msg);
+    if (msg.type === 'shot' || msg.type === 'hazard') this.shotLog.push(msg);
     const raw = JSON.stringify(msg);
     for (const { socket, alive } of this.clients.values()) {
       if (alive && socket.readyState === 1 /* OPEN */) socket.send(raw);

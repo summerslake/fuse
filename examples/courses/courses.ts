@@ -27,6 +27,7 @@ import {
   UILobby,
   type UILobbyJoinParams,
   type UILobbyCourse,
+  type GameEventMessage,
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
@@ -82,8 +83,8 @@ const gameContext: {
   playersFromHost?: boolean,
   /** true once the lobby closed and the round is under way */
   roundStarted?: boolean,
-  /** shots received before GameSync existed; applied in order once it does */
-  pendingShots: any[],
+  /** game events received before GameSync existed; applied in order once it does */
+  pendingShots: GameEventMessage[],
   // true while the ball is flying a re-simulated remote shot (not a real local
   // shot) — GameSync must not report its landing as our own result
   replayingRemoteShot?: boolean,
@@ -519,7 +520,11 @@ async function setupCourse() {
   });
   gameContext.golfBall.on('shotEnded', (result) => {
     console.log('result', result);
-    if (result.isInWater) {
+    // Single-machine: the ball coming to rest in water IS the prompt. In
+    // multiplayer it isn't — this fires for replayed remote shots too, and the
+    // authoritative result hasn't been round-tripped yet. GameSync raises the
+    // prompt off the echo instead, only for a player we own.
+    if (!gameContext.net && result.isInWater) {
       gameContext.dialogs.hazard?.open();
     }
     app.sendShotResult(
@@ -564,10 +569,20 @@ async function setupCourse() {
     // resumed). Scoring and turn order are deterministic, so replaying these in
     // order lands us exactly where everyone else already is.
     if (gameContext.pendingShots.length) {
-      console.log(`[net] catching up on ${gameContext.pendingShots.length} shot(s)`);
-      for (const shot of gameContext.pendingShots) gameContext.gameSync.applyShot(shot);
+      console.log(`[net] catching up on ${gameContext.pendingShots.length} event(s)`);
+      for (const event of gameContext.pendingShots) {
+        if (event.type === 'hazard') gameContext.gameSync.applyHazard(event);
+        else gameContext.gameSync.applyShot(event);
+      }
       gameContext.pendingShots = [];
     }
+
+    // The hazard prompt follows the authoritative echo, not our own ball, so a
+    // remote player's ball in the water never puts a dialog on this screen.
+    gameContext.gameSync.on('hazard', (playerId, isLocal) => {
+      console.log(`[net] ${playerId} is in the water${isLocal ? ' — our call' : ''}`);
+      if (isLocal) gameContext.dialogs.hazard?.open();
+    });
   }
   gameContext.game?.on('nextShot', (player) => {
     console.log(`A new player (${player.name}) is up!`);
@@ -587,18 +602,18 @@ async function setupCourse() {
     holes: gameContext.course.holes
   });
   gameContext.dialogs.hazard = new UIHazardDialog('#hazard', { preventClose: true });
-  gameContext.dialogs.hazard.on('drop', () => {
-    gameContext.game?.drop();
-    gameContext.dialogs.hazard?.close();
-  });
-  gameContext.dialogs.hazard.on('mulligan', () => {
-    gameContext.game?.mulligan();
-    gameContext.dialogs.hazard?.close();
-  });
-  gameContext.dialogs.hazard.on('rehit', () => {
-    gameContext.game?.rehit();
-    gameContext.dialogs.hazard?.close();
-  });
+  for (const action of ['drop', 'mulligan', 'rehit'] as const) {
+    gameContext.dialogs.hazard.on(action, () => {
+      // Multiplayer: send it and let the echo apply it, so this client moves at
+      // the same point in the log as everyone else. Solo: apply it right here.
+      if (gameContext.gameSync) {
+        gameContext.gameSync.resolveHazard(action);
+      } else {
+        gameContext.game?.applyHazardAction(gameContext.game.activePlayer.id, action);
+      }
+      gameContext.dialogs.hazard?.close();
+    });
+  }
 
   gameContext.mainMenu.on('exit', () => app.exit())
 
@@ -957,8 +972,13 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   // Shots can arrive before this client has a game: the course is still loading,
   // or we just resumed into a round already in progress and the relay is
   // replaying it. Hold them and feed them through GameSync once it exists —
-  // dropping them would leave this client's scorecard quietly wrong.
+  // dropping them would leave this client's scorecard quietly wrong. Hazard
+  // resolutions ride the same buffer, because they only make sense applied in
+  // sequence with the shots around them.
   net.on('shot', (msg) => {
+    if (!gameContext.gameSync) gameContext.pendingShots.push(msg);
+  });
+  net.on('hazard', (msg) => {
     if (!gameContext.gameSync) gameContext.pendingShots.push(msg);
   });
 

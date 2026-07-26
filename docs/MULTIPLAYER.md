@@ -57,7 +57,7 @@ the current state rather than approximately near it.
 
 ---
 
-## Wire protocol (v4)
+## Wire protocol (v5)
 
 JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 
@@ -66,6 +66,7 @@ JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 | `join` | claim these players; carries `clientKey` (stable across reconnects) and `sinceShot` |
 | `shot_launch` | I just swung — fly this live |
 | `shot_result` | my ball came to rest here |
+| `hazard_action` | how I'm playing my ball out of the water (`drop`/`rehit`/`mulligan`) |
 | `start` | close the lobby, start the round |
 | `leave` | graceful exit |
 
@@ -75,11 +76,18 @@ JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 | `roster` | someone joined or left |
 | `launch` | re-simulate this shot now |
 | `shot` | score this (sent to everyone, including the sender) |
+| `hazard` | apply this hazard resolution (likewise everyone, sender included) |
 | `started` | lobby closed, build the game from this roster |
 | `error` | bad secret, version mismatch, course mismatch, room started |
 
 `protocolVersion` is checked on join and mismatches are rejected with a readable
 message — two people on different builds is the expected failure mode.
+
+`shot` and `hazard` share one ordered log and one `sinceShot` counter. They have
+to: a drop replayed out of sequence puts the ball somewhere nobody else has it.
+Note what a `hazard` message does *not* carry — where the drop landed. Only the
+choice travels, and every client recomputes the lie by raycasting a course it
+has already loaded, the same way turn order is derived rather than sent.
 
 ---
 
@@ -102,11 +110,11 @@ message — two people on different builds is the expected failure mode.
 |---|---|
 | `examples/courses/courses.ts` | shot input, live re-simulation, lobby wiring |
 | `examples/multiplayer/` | entry page that opens straight into the lobby |
-| `examples/diagnostics/` | probe for running FUSE inside OGS Desktop |
+| `examples/diagnostics/` | probe for running FUSE inside OGS Desktop (CSP, socket, ready signal) |
 
-**Tests** — 38, run in plain node with no browser, rapier or GPU. Includes two
+**Tests** — 47, run in plain node with no browser or GPU. Includes two
 independent `CourseGame`s driven only by their own `GameSync` through a real
-relay, staying in sync across a full round.
+relay, staying in sync across a full round and across a water hazard.
 
 ---
 

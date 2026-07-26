@@ -5,7 +5,7 @@ import EventEmitter from 'eventemitter3';
 import { createRelay } from '../server/relay.js';
 import { NetClient } from '@/net/client';
 import { GameSync } from '@/net/gameSync';
-import { CourseGame } from '@/courses/game';
+import { CourseGame, type HazardAction } from '@/courses/game';
 import { type Hole } from '@/courses/types';
 
 /**
@@ -21,7 +21,9 @@ function makeCourse() {
   const holes = new Map<number, Hole>();
   holes.set(1, { number: '1', par: 3, waypoints: new Map([['tee', V(0, 0, 0)], ['aim', V(0, 0, 100)], ['pin', V(0, 0, 150)]]) });
   holes.set(2, { number: '2', par: 4, waypoints: new Map([['tee', V(0, 0, 0)], ['aim', V(0, 0, 120)], ['pin', V(0, 0, 200)]]) });
-  return { holes } as any;
+  // No ground meshes: a drop finds nowhere legal and falls back to stroke and
+  // distance. Deterministic on both clients, which is the point being tested.
+  return { holes, getGroundMeshes: () => [] } as any;
 }
 
 /** Fake GolfBall: an emitter with a positioned object; enough for GameSync. */
@@ -53,7 +55,7 @@ function waitForRoster(c: NetClient, n: number): Promise<any> {
   });
 }
 
-interface Side { net: NetClient; game: CourseGame; ball: any; clientId: string; }
+interface Side { net: NetClient; game: CourseGame; ball: any; clientId: string; sync: GameSync; }
 
 async function setupSession(port: number): Promise<{ a: Side; b: Side }> {
   const mk = (name: string, id: string) => {
@@ -89,10 +91,10 @@ async function setupSession(port: number): Promise<{ a: Side; b: Side }> {
     });
     return { ball, game };
   };
-  const a = { net: netA, clientId: joinedA.clientId, ...build(joinedA.clientId) };
-  const b = { net: netB, clientId: joinedB.clientId, ...build(joinedB.clientId) };
-  new GameSync(a.game, a.net, a.ball);
-  new GameSync(b.game, b.net, b.ball);
+  const a: any = { net: netA, clientId: joinedA.clientId, ...build(joinedA.clientId) };
+  const b: any = { net: netB, clientId: joinedB.clientId, ...build(joinedB.clientId) };
+  a.sync = new GameSync(a.game, a.net, a.ball);
+  b.sync = new GameSync(b.game, b.net, b.ball);
   return { a, b };
 }
 
@@ -101,7 +103,7 @@ async function setupSession(port: number): Promise<{ a: Side; b: Side }> {
  *  separate 'turn' message to wait on. */
 async function shoot(
   a: Side, b: Side, shooter: Side,
-  opts: { pos: [number, number, number]; surface?: string; isHoled?: boolean },
+  opts: { pos: [number, number, number]; surface?: string; isHoled?: boolean; isInWater?: boolean },
 ) {
   // register both waiters BEFORE emitting so nothing is missed
   const waits = [once(a.net, 'shot'), once(b.net, 'shot')];
@@ -109,7 +111,15 @@ async function shoot(
   shooter.ball.emit('shotEnded', {
     surface: opts.surface,
     isHoled: !!opts.isHoled,
+    isInWater: !!opts.isInWater,
   });
+  await Promise.all(waits);
+}
+
+/** Resolve a hazard for `shooter` and wait for both clients to apply the echo. */
+async function resolveHazard(a: Side, b: Side, shooter: Side, action: HazardAction) {
+  const waits = [once(a.net, 'hazard'), once(b.net, 'hazard')];
+  shooter.sync.resolveHazard(action);
   await Promise.all(waits);
 }
 
@@ -165,6 +175,107 @@ describe('GameSync — two clients play a synced round', () => {
 
     // the whole scorecard state matches across clients
     expect(scores(a.game)).toEqual(scores(b.game));
+  });
+
+  it('keeps both clients in sync through a water hazard', async () => {
+    relay = createRelay({ port: 0 });
+    await relay.ready;
+    const port = relay.wss.address().port as number;
+    const { a, b } = await setupSession(port);
+
+    const idA = a.game.players[0].id;
+    const idB = a.game.players[1].id;
+
+    // Only the owner is prompted — a splash on B's screen must not open a
+    // dialog on A's.
+    const promptedOnA: Array<[string, boolean]> = [];
+    const promptedOnB: Array<[string, boolean]> = [];
+    a.sync.on('hazard', (id, isLocal) => promptedOnA.push([id, isLocal]));
+    b.sync.on('hazard', (id, isLocal) => promptedOnB.push([id, isLocal]));
+
+    // A tees off into the lake.
+    await shoot(a, b, a, { pos: [0, 0, 40], surface: 'plane_lake', isInWater: true });
+
+    expect(promptedOnA).toEqual([[idA, true]]);   // A's call
+    expect(promptedOnB).toEqual([[idA, false]]);  // B is told, but not asked
+
+    // Nobody's turn moved: the shot isn't over yet, on either client.
+    expect(a.game.activePlayer.id).toBe(idA);
+    expect(b.game.activePlayer.id).toBe(idA);
+    expect(a.game.players[0].scorecard.get('1')).toBe(1);
+    expect(scores(a.game)).toEqual(scores(b.game));
+
+    // A takes the drop. Only the choice crosses the wire; both clients
+    // recompute the lie and the penalty from it.
+    await resolveHazard(a, b, a, 'drop');
+
+    expect(a.game.players[0].scorecard.get('1')).toBe(2);
+    expect(b.game.players[0].scorecard.get('1')).toBe(2);
+    expect(a.game.players[0].start.toArray()).toEqual(b.game.players[0].start.toArray());
+    expect(a.game.players[0].start.z).toBe(0);    // stroke and distance
+
+    // A is back on the tee at 150 and B has not played, so the tie goes to
+    // honors — A plays on. Both clients agree without being told.
+    expect(a.game.activePlayer.id).toBe(idA);
+    expect(b.game.activePlayer.id).toBe(idA);
+    expect(scores(a.game)).toEqual(scores(b.game));
+
+    // and play continues normally from there
+    await shoot(a, b, a, { pos: [0, 0, 30], surface: 'fairway' });
+    expect(a.game.activePlayer.id).toBe(idB);
+    expect(b.game.activePlayer.id).toBe(idB);
+    expect(scores(a.game)).toEqual(scores(b.game));
+  });
+
+  it('a duplicated hazard resolution does not stack a second penalty', async () => {
+    relay = createRelay({ port: 0 });
+    await relay.ready;
+    const port = relay.wss.address().port as number;
+    const { a, b } = await setupSession(port);
+
+    await shoot(a, b, a, { pos: [0, 0, 40], surface: 'plane_lake', isInWater: true });
+    await resolveHazard(a, b, a, 'drop');
+    expect(a.game.players[0].scorecard.get('1')).toBe(2);
+
+    // Send it again — a double-tapped button, or a replay of an event we have
+    // already applied. Both clients must ignore it.
+    await resolveHazard(a, b, a, 'drop');
+    expect(a.game.players[0].scorecard.get('1')).toBe(2);
+    expect(b.game.players[0].scorecard.get('1')).toBe(2);
+    expect(scores(a.game)).toEqual(scores(b.game));
+  });
+
+  it('a hazard resolution for a player the sender does not own is rejected', async () => {
+    relay = createRelay({ port: 0 });
+    await relay.ready;
+    const port = relay.wss.address().port as number;
+    const { a, b } = await setupSession(port);
+    const idB = a.game.players[1].id;
+
+    let bApplied = false;
+    b.net.on('hazard', () => { bApplied = true; });
+    a.net.sendHazardAction(idB, 'mulligan'); // A speaking for B's player
+    await new Promise((r) => setTimeout(r, 150));
+    expect(bApplied).toBe(false);
+    expect(b.game.players[1].scorecard.size).toBe(0);
+  });
+
+  it('a hazard resolution is replayed to a client that reconnects', async () => {
+    relay = createRelay({ port: 0 });
+    await relay.ready;
+    const port = relay.wss.address().port as number;
+    const { a, b } = await setupSession(port);
+
+    await shoot(a, b, a, { pos: [0, 0, 40], surface: 'plane_lake', isInWater: true });
+    await resolveHazard(a, b, a, 'drop');
+
+    // Both events are in the room's log, in order — replaying shots alone would
+    // rebuild a different round.
+    const room = relay.rooms.get('g');
+    expect(room.shotLog.map((m: any) => m.type)).toEqual(['shot', 'hazard']);
+    // and each client counted both, so a resume asks for the right offset
+    expect(a.net.shotsSeen).toBe(2);
+    expect(b.net.shotsSeen).toBe(2);
   });
 
   it('a shot for a player the sender does not own never reaches the other client', async () => {

@@ -15,6 +15,8 @@ function logRoom(room, message) {
 
 const MAX_MESSAGE_BYTES = 64 * 1024;
 const MAX_CLIENTS_PER_ROOM = 8;
+/** Mirrors HazardAction in src/courses/game.ts. */
+const HAZARD_ACTIONS = ['drop', 'rehit', 'mulligan'];
 /** How long a started room keeps everyone's slots after the last one drops. */
 const EMPTY_ROOM_TTL_MS = 5 * 60 * 1000;
 
@@ -75,6 +77,14 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         // live swing announcement — same ownership rule as a shot result
         if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
         room.broadcast({ type: 'launch', playerId: msg.playerId, launch: msg.launch });
+        break;
+      }
+      case 'hazard_action': {
+        // how the shooter played a ball in the water — same ownership rule, and
+        // it goes in the log with the shots so a resume replays it in sequence
+        if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
+        if (!HAZARD_ACTIONS.includes(msg.action)) return;
+        room.broadcast({ type: 'hazard', playerId: msg.playerId, action: msg.action });
         break;
       }
       case 'start': {

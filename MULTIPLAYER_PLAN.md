@@ -1,6 +1,26 @@
 # FUSE Remote Multiplayer — Implementation Plan
 
 **Status:**
+- ✅ **Merged upstream and networked water hazards** (2026-07-26, protocol v5).
+  Upstream landed water hazards, deleted Rapier, and reworked the renderer. Two
+  files conflicted; the interesting one was `src/courses/game.ts`, where their
+  hazard feature broke an assumption of ours — that every shot hands off the
+  turn. A ball in the water isn't a finished shot, so `applyShotResult` now
+  reports `awaitingHazard` and leaves the turn where it is, and the three
+  resolutions (`drop`/`rehit`/`mulligan`) run the turn rules themselves.
+
+  Those resolutions move a player's ball and change the scorecard, so they had
+  to become network events or the clients would silently diverge the first time
+  anyone found the lake. They follow the pattern already used for turn order:
+  **only the choice crosses the wire.** Where the drop lands is recomputed on
+  every client by raycasting a course all of them have loaded. `hazard` events
+  share the shot log and the `sinceShot` counter, so a reconnect replays them
+  in sequence with the shots around them.
+
+  Other upstream consequences: `surface` is a plain string end to end now
+  (`NetShotResult` flattened with it — that's the version bump), and our own
+  Low-quality renderer commit is superseded by upstream's, which skips the
+  post-processing pipeline outright.
 - 🏌️ **IT WORKS. Full 9-hole round played over the internet, 2026-07-26.** Lake
   and Brett, two houses, two launch monitors, start to finish with no
   intervention and nothing to work around. That is the goal this plan was
@@ -39,15 +59,20 @@
   query-param debug path.
 
   **Do not repeat these dead ends:** a stuck `initialize()` looks exactly like a
-  WASM/CSP failure (it isn't — check `app.world` separately); an unstarted relay
+  CSP failure (it isn't — it means the bundle never evaluated); an unstarted relay
   looks exactly like a blocked WebSocket (check the port is actually listening);
   and `isSecureContext` is true on localhost while `ws://` works fine there.
+  (Historical: this used to hang on Rapier's WASM init. Upstream removed Rapier
+  in July 2026, so `initialize()` now resolves immediately and `app.world` is
+  gone — the WASM half of these symptoms can no longer happen.)
 - ✅ **Diagnostics page for the Desktop/Square spike** (2026-07-25).
   `examples/diagnostics/` — a read-only probe built to run *inside* Desktop where
   a console may not be reachable: every answer is on screen and mirrored through
   `app.log()` into Desktop's main.log. Reports `appType`/embedding, page protocol,
-  Rapier WASM init, a raw `ws://` open **and** a real relay join, the `setup`
-  payload, and a live `app.on('shot')` log. Two dev-server changes came with it:
+  a raw `ws://` open **and** a real relay join, the `setup`
+  payload, and a live `app.on('shot')` log. (The Rapier/WASM rows were dropped
+  when upstream removed Rapier; the CSP, socket and ready-signal rows remain.)
+  Two dev-server changes came with it:
   requests under `/fuse/examples/...` (Desktop's URL shape) are now rewritten to
   the examples root, and `OGS_DIAG=1` serves the diagnostics page in place of
   whatever game Desktop launches. See the spike steps below.
@@ -356,8 +381,8 @@ client/server divergence as a category of bug. Do not "optimize" this away.
 
 ### 4. Remote shots are visual replays, not simulations
 
-Never run Rapier for a remote player's shot. Interpolate the sample arrays and
-leave a marker at `endPosition`.
+Never re-run the physics solver for a remote player's shot as if it were live
+input. Interpolate the sample arrays and leave a marker at `endPosition`.
 
 ---
 
@@ -817,7 +842,7 @@ against the dev server, Desktop drops to "offline mode" and the library shows
 `https://app.opengolfsim.com` so only `/fuse/**` is served locally.
 
 then launch any fuse game from the Desktop library and read the screen. It reports
-`app.appType`, the embedding, the page protocol, whether Rapier's WASM initialized,
+`app.appType`, the embedding, the page protocol,
 whether a `ws://` socket opens **and** completes a real relay join, the `setup`
 payload, and a live log of `app.on('shot')` events. Take one real swing to finish it.
 

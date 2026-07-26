@@ -35,7 +35,9 @@ function makeCourse() {
       ['tee', V(0, 0, 0)], ['aim', V(0, 0, 120)], ['pin', V(0, 0, 200)],
     ]),
   });
-  return { holes } as any;
+  // No ground meshes, so the drop search finds nowhere legal and falls back to
+  // stroke-and-distance — the deterministic branch, and the one worth pinning.
+  return { holes, getGroundMeshes: () => [] } as any;
 }
 
 const fakeBall = { on() {} } as any;
@@ -59,6 +61,7 @@ function makeGame(playerIds = ['p1', 'p2'], localPlayerIds?: string[]) {
 
 const fairway = (z: number) => ({ endPosition: V(0, 0, z), surface: 'fairway' as any, isHoled: false });
 const green = (z: number) => ({ endPosition: V(0, 0, z), surface: 'green' as any, isHoled: false });
+const water = (z: number) => ({ endPosition: V(0, 0, z), surface: 'plane_lake' as any, isHoled: false, isInWater: true });
 const player = (g: CourseGame, id: string) => g.players.find((p) => p.id === id)!;
 /** Play a shot for whoever is currently up (mirrors real turn-gated play). */
 const play = (g: CourseGame, result: any) => g.applyShotResult(g.activePlayer.id, result);
@@ -189,6 +192,75 @@ describe('CourseGame — honors off the tee', () => {
     expect(g.activePlayer.id).toBe('p2');            // hole 2, p2 has honors
     play(g, fairway(60));                             // p2 -> 140 from the pin (z=200)
     expect(g.activePlayer.id).toBe('p1');            // p1 still on the tee (200) -> away
+  });
+});
+
+describe('CourseGame — water hazards', () => {
+  let g: CourseGame;
+  beforeEach(() => { g = makeGame(); });
+
+  it('holds the turn on the shooter until they say how they are playing it', () => {
+    const outcome = play(g, water(40));
+    expect(outcome.awaitingHazard).toBe(true);
+    expect(outcome.holeFinished).toBe(false);
+    expect(g.activePlayer.id).toBe('p1');             // still p1's problem
+    expect(player(g, 'p1').strokes).toBe(1);          // the shot itself counts
+  });
+
+  it('rehit replays from the previous spot, stroke still counted', () => {
+    play(g, fairway(60));                             // p1 to 90 out
+    play(g, fairway(10));                             // p2 to 140 out -> p2 away
+    expect(g.activePlayer.id).toBe('p2');
+    play(g, water(140));                              // p2 finds the lake
+
+    g.applyHazardAction('p2', 'rehit');
+    const p2 = player(g, 'p2');
+    expect(p2.start.z).toBe(10);                      // back where he hit from
+    expect(p2.scorecard.get('1')).toBe(2);            // no penalty, no forgiveness
+    expect(g.activePlayer.id).toBe('p2');             // 140 out, still away
+  });
+
+  it('mulligan erases the stroke that found the water', () => {
+    play(g, water(40));
+    expect(player(g, 'p1').strokes).toBe(1);
+    g.applyHazardAction('p1', 'mulligan');
+    const p1 = player(g, 'p1');
+    expect(p1.strokes).toBe(0);
+    expect(p1.scorecard.get('1')).toBe(0);
+    expect(p1.start.z).toBe(0);                       // back on the tee
+  });
+
+  it('drop adds a penalty stroke and re-runs the away rule', () => {
+    play(g, fairway(100));                            // p1 to 50 out
+    expect(g.activePlayer.id).toBe('p2');             // p2 on the tee, 150 out -> away
+    play(g, water(140));                              // p2 finds the lake
+
+    // A resolution has to announce the turn the same way a shot does — without
+    // it the UI never sets up the next swing and play just stops.
+    let announced = '';
+    g.once('nextShot', (p) => { announced = p.id; });
+
+    g.applyHazardAction('p2', 'drop');
+    const p2 = player(g, 'p2');
+    expect(p2.scorecard.get('1')).toBe(2);            // the shot + the penalty
+    expect(p2.start.z).toBe(0);                       // nowhere legal -> stroke and distance
+    // Back on the tee at 150 against p1's 50, p2 is still away and plays on.
+    expect(g.activePlayer.id).toBe('p2');
+    expect(announced).toBe('p2');
+  });
+
+  it('every client derives the same outcome from the action alone', () => {
+    // Two independent games fed identical inputs — the property the wire format
+    // relies on, since only the button press travels.
+    const a = makeGame();
+    const b = makeGame();
+    for (const g of [a, b]) {
+      g.applyShotResult('p1', water(40));
+      g.applyHazardAction('p1', 'drop');
+    }
+    expect(player(a, 'p1').start.toArray()).toEqual(player(b, 'p1').start.toArray());
+    expect(player(a, 'p1').scorecard.get('1')).toBe(player(b, 'p1').scorecard.get('1'));
+    expect(a.activePlayer.id).toBe(b.activePlayer.id);
   });
 });
 

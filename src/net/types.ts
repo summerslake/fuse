@@ -4,8 +4,11 @@
  *
  * Keep PROTOCOL_VERSION in sync with server/relay.js.
  */
+import { type HazardAction } from '@/courses/game';
 
 export const PROTOCOL_VERSION = 5;
+
+export { type HazardAction };
 
 /** A roster player as the server tracks it: a Player with a namespaced id + owner. */
 export interface RosterPlayer {
@@ -86,6 +89,16 @@ export interface ShotLaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
+/**
+ * How the shooter chose to play a ball that finished in water. Only the choice
+ * travels — where the drop lands is recomputed identically on every client (see
+ * CourseGame.applyHazardAction), the same way turn order already is.
+ */
+export interface HazardActionMessage {
+  type: 'hazard_action';
+  playerId: string;
+  action: HazardAction;
+}
 /** Close the lobby and start the round for everyone. Any client may send it. */
 export interface StartMessage {
   type: 'start';
@@ -97,6 +110,7 @@ export type ClientMessage =
   | JoinMessage
   | ShotResultMessage
   | ShotLaunchMessage
+  | HazardActionMessage
   | StartMessage
   | LeaveMessage;
 
@@ -124,6 +138,12 @@ export interface LaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
+/** A hazard resolution, echoed to everyone. Ordered in the log alongside shots. */
+export interface HazardMessage {
+  type: 'hazard';
+  playerId: string;
+  action: HazardAction;
+}
 /** The lobby closed — build the game from this (now frozen) roster. */
 export interface StartedMessage {
   type: 'started';
@@ -138,5 +158,13 @@ export type ServerMessage =
   | RosterMessage
   | ShotMessage
   | LaunchMessage
+  | HazardMessage
   | StartedMessage
   | ErrorMessage;
+
+/**
+ * The messages that change game state, in the order they must be applied. Both
+ * go in the room's log and both count toward `sinceShot`, because replaying
+ * shots without the hazard resolutions between them rebuilds a different round.
+ */
+export type GameEventMessage = ShotMessage | HazardMessage;
