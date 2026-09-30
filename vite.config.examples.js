@@ -37,8 +37,9 @@ const desktopProxy = {
  * launches redirects to the diagnostics page instead — that's the spike.
  */
 /**
- * OGS Desktop builds its library from `${app_url}/api/courses/home`, which we
- * proxy — so we can hand it one extra tile. "Multiplayer" launches our lobby
+ * OGS Desktop builds its library from `${app_url}/api/library/home` (older
+ * builds: `/api/courses/home`), which we proxy — so we can hand it one extra
+ * tile. "Multiplayer" launches our lobby
  * entry page with no course attached; the lobby picks the course itself, which
  * is why this entry deliberately has no `courseUrl`.
  *
@@ -60,7 +61,11 @@ async function serveLibraryWithMultiplayer(req, res) {
   const upstream = new URL(req.url, 'https://app.opengolfsim.com');
   let body = { courses: [] };
   try {
-    const response = await fetch(upstream, { headers: { accept: 'application/json' } });
+    // The library endpoint is per-user, so pass Desktop's token through.
+    const headers = { accept: 'application/json' };
+    if (req.headers['x-ogs-token']) headers['x-ogs-token'] = req.headers['x-ogs-token'];
+    const response = await fetch(upstream, { headers });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     body = await response.json();
   } catch (err) {
     // No internet, or something intercepting TLS (a dropped connection often
@@ -92,7 +97,7 @@ function desktopCompat(server) {
 
     // Add our tile to the library on its way through. Everything else under
     // /api is proxied untouched.
-    if (req.url.startsWith('/api/courses/home')) {
+    if (req.url.startsWith('/api/library/home') || req.url.startsWith('/api/courses/home')) {
       return serveLibraryWithMultiplayer(req, res).catch(() => next());
     }
     if (req.url.startsWith('/fuse/examples/')) {
