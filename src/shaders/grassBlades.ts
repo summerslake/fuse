@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { MeshLambertNodeMaterial } from 'three/webgpu';
+import { MeshStandardNodeMaterial } from 'three/webgpu';
 import {
   vec2, vec3, vec4, float,
   uv, texture, uniform as tslUniform,
@@ -8,15 +8,17 @@ import {
   normalize, dot, mix, smoothstep as tslSmoothstep,
   luminance
 } from 'three/tsl';
+import { lightmapShadowNode } from '@/shaders/lightmap';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
 export type GrassAssets = {
-  noiseTexture: THREE.Texture<HTMLImageElement, THREE.TextureEventMap>;
-  geometry: THREE.BufferGeometry | null;
+  grainTexture?: THREE.Texture<HTMLImageElement, THREE.TextureEventMap>;
+  noiseTexture?: THREE.Texture<HTMLImageElement, THREE.TextureEventMap>;
+  geometry?: THREE.BufferGeometry | null;
 }
 
-export type GrassShaderOptions = {
+export type GrassBladesOptions = {
   bladeWidth?: number,
   bladeHeight?: number,
   scaleXZ?: number,
@@ -48,6 +50,11 @@ export type GrassShaderOptions = {
   /** Mip level to sample the terrain texture at. Higher = blurrier =
    *  smoother grass color. 0 = full detail. Try 4-7. */
   terrainBlur?: number,
+  lightmap?: THREE.Texture,
+  lightmapWorldSize?: number,
+  lightmapStrength?: number,
+  clumpSpread?: number,  // clump radius as fraction of clump spacing; higher = blades fill more of the gap
+  bladeCount?: number,   // blades per clump  
 }
 
 type TerrainBounds = { minX: number, minZ: number, sizeX: number, sizeZ: number };
@@ -188,10 +195,10 @@ function createBladeGeometry() {
 
 function createBladeMaterial(
   noiseTexture: GrassAssets['noiseTexture'],
-  opts: GrassShaderOptions = {},
+  opts: GrassBladesOptions = {},
   terrainBounds: TerrainBounds | null = null,
 ) {
-  // Uniforms — these have .value so the GrassShader setters still work
+  // Uniforms — these have .value so the GrassBlades setters still work
   const uniforms: Record<string, any> = {
     baseColor:            tslUniform(new THREE.Color(opts.baseColor ?? '#3a5a20')),
     tipColor1:            tslUniform(new THREE.Color(opts.tipColor1 ?? '#6a9a45')),
@@ -202,23 +209,23 @@ function createBladeMaterial(
     noiseTexture:         { value: noiseTexture },
   };
 
-  const material = new MeshLambertNodeMaterial({
+  const material = new MeshStandardNodeMaterial({
     side: THREE.DoubleSide,
     transparent: true,
-    // alphaTest: 0.01,
+    roughness: 1.0,
+    metalness: 0.0
   });
+  material.normalNode = vec3(0.0, 1.0, 0.0);
 
   // --- Color: gradient from base (bottom) to tip (top) ---
   const bladeUV = uv();
-  // const grassColor = mix(uniforms.baseColor, uniforms.tipColor1, float(1.0).sub(bladeUV.y));
-  // const grassColor = mix(uniforms.tipColor1, uniforms.baseColor, float(1.0).sub(bladeUV.y));
   const authoredColor = mix(uniforms.tipColor1, uniforms.baseColor, float(1.0).sub(bladeUV.y));
 
   let grassColor: any = authoredColor;
 
   if (opts.terrainTexture && terrainBounds) {
     // Tint uniform: share the terrain material's node if provided,
-    // otherwise own one (settable via GrassShader.terrainTint).
+    // otherwise own one (settable via GrassBlades.terrainTint).
     uniforms.uTerrainTint = opts.terrainTintNode
       ?? tslUniform(new THREE.Color(opts.terrainTint ?? '#ffffff'));
     uniforms.uGroundMatch = tslUniform(opts.groundMatch ?? 1.0);
@@ -263,7 +270,17 @@ function createBladeMaterial(
     grassColor = mix(authoredColor, matchedColor, uniforms.uGroundMatch);
   }
 
-  material.colorNode = grassColor.mul(uniforms.uGrassLightIntensity);
+  // material.colorNode = grassColor.mul(uniforms.uGrassLightIntensity);
+  let litColor = grassColor.mul(uniforms.uGrassLightIntensity);
+  if (opts.lightmap) {
+    // Baked course shadows: blades darken under canopies to match the
+    // terrain beneath them (same world-position sampling as surfaces).
+    const { node } = lightmapShadowNode(
+      opts.lightmap, opts.lightmapWorldSize ?? 1000, opts.lightmapStrength ?? 0.85
+    );
+    litColor = litColor.mul(node);
+  }
+  material.colorNode = litColor;  
 
   // --- Distance fade (XZ plane) ---
   const worldPos = positionWorld;
@@ -293,140 +310,26 @@ function createBladeMaterial(
   return { material, uniforms };
 }
 
-// function createBladeMaterial(noiseTexture: GrassAssets['noiseTexture'], opts: GrassShaderOptions = {}) {
-//   const uniforms = {
-//     uGrassLightIntensity: { value: opts.lightIntensity ?? 1.0 },
-//     uNoiseScale:          { value: opts.noiseScale ?? 1.5 },
-//     uRenderDistance:      { value: opts.renderDistance ?? 0.0 },
-//     baseColor:            { value: new THREE.Color(opts.baseColor ?? '#3a5a20') },
-//     tipColor1:            { value: new THREE.Color(opts.tipColor1 ?? '#6a9a45') },
-//     tipColor2:            { value: new THREE.Color(opts.tipColor2 ?? '#4a7a30') },
-//     noiseTexture:         { value: noiseTexture },
-//   };
-
-//   const material = new THREE.MeshLambertMaterial({
-//     side: THREE.DoubleSide,
-//     transparent: true,
-//   });
-
-//   material.customProgramCacheKey = () => 'grass-blade-material';
-//   material.onBeforeCompile = (shader) => {
-//     shader.uniforms.uTipColor1           = uniforms.tipColor1;
-//     shader.uniforms.uTipColor2           = uniforms.tipColor2;
-//     shader.uniforms.uBaseColor           = uniforms.baseColor;
-//     shader.uniforms.uGrassLightIntensity = uniforms.uGrassLightIntensity;
-//     shader.uniforms.uNoiseScale          = uniforms.uNoiseScale;
-//     shader.uniforms.uNoiseTexture        = uniforms.noiseTexture;
-//     shader.uniforms.uRenderDistance      = uniforms.uRenderDistance;
-
-//     // ---- Vertex shader ----
-
-//     shader.vertexShader = shader.vertexShader.replace(
-//       '#include <common>',
-//       /* glsl */ `#include <common>
-//       uniform sampler2D uNoiseTexture;
-//       uniform float uNoiseScale;
-//       uniform float uRenderDistance;
-//       varying vec2 vBladeUV;
-//       varying vec2 vGlobalUV;
-//       varying float vDistanceFade;
-//       `,
-//     );
-
-//     shader.vertexShader = shader.vertexShader.replace(
-//       '#include <project_vertex>',
-//       /* glsl */ `
-//       #ifdef USE_INSTANCING
-//         vec4 grassWorldPos = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
-//       #else
-//         vec4 grassWorldPos = modelMatrix * vec4(transformed, 1.0);
-//       #endif
-
-//       float terrainSize = 100.0;
-//       vGlobalUV = (terrainSize - grassWorldPos.xz) / terrainSize;
-//       vBladeUV = uv;
-
-//       if (uRenderDistance > 0.0) {
-//         float distToCam = length(grassWorldPos.xz - cameraPosition.xz);
-//         vDistanceFade = 1.0 - smoothstep(uRenderDistance * 0.6, uRenderDistance, distToCam);
-//       } else {
-//         vDistanceFade = 1.0;
-//       }
-
-//       // Terrain backface culling — hide grass on surfaces facing away from camera
-//       vec3 surfaceNormal = normalize((modelMatrix * instanceMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
-//       vec3 viewDir = normalize(cameraPosition - grassWorldPos.xyz);
-//       if (dot(surfaceNormal, viewDir) < 0.0) {
-//         vDistanceFade = 0.0;
-//       }
-//       // Fade out grass too close to camera
-//       float nearDist = length(grassWorldPos.xyz - cameraPosition);
-//       vDistanceFade *= smoothstep(0.5, 2.0, nearDist);
-
-//       #include <project_vertex>
-//       `,
-//     );
-
-//     // ---- Fragment shader ----
-
-//     shader.fragmentShader = shader.fragmentShader.replace(
-//       '#include <common>',
-//       /* glsl */ `#include <common>
-//       uniform vec3 uBaseColor;
-//       uniform vec3 uTipColor1;
-//       uniform vec3 uTipColor2;
-//       uniform sampler2D uNoiseTexture;
-//       uniform float uNoiseScale;
-//       uniform float uGrassLightIntensity;
-//       varying vec2 vBladeUV;
-//       varying vec2 vGlobalUV;
-//       varying float vDistanceFade;
-//       `,
-//     );
-
-//     // Override normal to point upward for correct shadow receiving
-//     shader.fragmentShader = shader.fragmentShader.replace(
-//       '#include <normal_fragment_maps>',
-//       /* glsl */ `#include <normal_fragment_maps>
-//       normal = vec3(0.0, 1.0, 0.0);
-//       `,
-//     );
-
-//     shader.fragmentShader = shader.fragmentShader.replace(
-//       '#include <color_fragment>',
-//       /* glsl */ `
-//       if (vDistanceFade < 0.01) discard;
-
-//       vec4 grassVariation = texture2D(uNoiseTexture, vGlobalUV * uNoiseScale);
-//       // vec3 tipColor = mix(uTipColor1, uTipColor2, grassVariation.r);
-
-//       diffuseColor.rgb = mix(uBaseColor, uTipColor1, 1.0 - vBladeUV.y) * uGrassLightIntensity;
-//       diffuseColor.a = vDistanceFade;
-//       `,
-//     );
-//   };
-
-//   return { material, uniforms };
-// }
-
-
-/* ================================================================== */
-/*  GrassShader                                                        */
-/* ================================================================== */
-
-
-export class GrassShader {
-  static async loadAssets(paths: { noisePath: string, modelPath: string }): Promise<GrassAssets> {
+export class GrassBlades {
+  static async loadAssets(paths: { grainPath?: string, noisePath?: string, modelPath?: string }): Promise<GrassAssets> {
     const texLoader = new THREE.TextureLoader();
 
-    const noiseTexture = texLoader.load(paths.noisePath);
-    noiseTexture.wrapS = noiseTexture.wrapT = THREE.RepeatWrapping;
-
+    let grainTexture: THREE.Texture<HTMLImageElement, THREE.TextureEventMap> | undefined;
+    if (paths.grainPath) {
+      grainTexture = await texLoader.loadAsync(paths.grainPath);
+      grainTexture.wrapS = grainTexture.wrapT = THREE.RepeatWrapping;
+    }
+    let noiseTexture: THREE.Texture<HTMLImageElement, THREE.TextureEventMap> | undefined;
+    if (paths.noisePath) {
+      noiseTexture = await texLoader.loadAsync(paths.noisePath);
+      noiseTexture.wrapS = noiseTexture.wrapT = THREE.RepeatWrapping;
+    }
+    
     let geometry: THREE.BufferGeometry | null = null;
     if (paths.modelPath) {
       const gltfLoader = new GLTFLoader();
       geometry = await new Promise((resolve, reject) => {
-        gltfLoader.load(paths.modelPath, (gltf) => {
+        gltfLoader.load(paths.modelPath!, (gltf) => {
           let geo: THREE.BufferGeometry | null = null;
           gltf.scene.traverse((child) => {
             if (!(child instanceof THREE.Mesh)) { return; }
@@ -437,11 +340,11 @@ export class GrassShader {
       });
     }
 
-    return { noiseTexture, geometry };
+    return { noiseTexture, geometry, grainTexture };
   }
 
   _uniforms: Record<string, any>;
-  _material: MeshLambertNodeMaterial;
+  _material: MeshStandardNodeMaterial;
   _geo: THREE.BufferGeometry;
   _heightVariation: number;
   _lean: number;
@@ -453,12 +356,13 @@ export class GrassShader {
   _cellSize: number;
   _maxNewPerFrame: number;
   _density: number;
+  _clumpRadius: number;
   _meshPool: THREE.InstancedMesh[];
   _activeCells: Map<string, any>;
   _cellCache: Map<string, any>;
   _cellTriangles: Map<string, any>;
 
-  constructor(sourceMesh: THREE.Mesh, assets: GrassAssets, opts: GrassShaderOptions = {}) {
+  constructor(sourceMesh: THREE.Mesh, assets: GrassAssets, opts: GrassBladesOptions = {}) {
     const bladeWidth  = opts.bladeWidth  ?? 0.025;
     const bladeHeight = opts.bladeHeight ?? 0.08;
 
@@ -517,16 +421,30 @@ export class GrassShader {
     this._lean = opts.lean ?? 0.3;
     this._layer = opts.layer;
 
+    // this._geo = createClumpGeometry({
+    //   bladeCount: 30,
+    //   radius: 0.15,
+    // Clump radius scales with clump spacing (1/√density): dense = tight
+    // tufts, sparse = same blades spread wider — blades thin out within the
+    // clump instead of identical tufts drifting apart.
+    const clumpSpread = opts.clumpSpread ?? 0.5;   // fraction of clump spacing
+    const density = opts.density ?? 10;
+    const bladeCount = opts.bladeCount ?? 30;
+
+    const clumpRadius = Math.min(0.6, clumpSpread / Math.sqrt(density));
+    this._clumpRadius = clumpRadius;
+
     this._geo = createClumpGeometry({
-      bladeCount: 30,
-      radius: 0.15,
+      bladeCount,
+      radius: clumpRadius,
+
       bladeWidth: bladeWidth * scaleXZ,
       bladeHeight: bladeHeight * scaleY,
       heightVariation: this._heightVariation,
       lean: this._lean,
     });
 
-    this._cellSize = opts.cellSize ?? 5;
+    this._cellSize = opts.cellSize ?? 10;
     this._maxNewPerFrame = opts.maxNewCellsPerFrame ?? 15;
     this._density = opts.density ?? 10;
 
@@ -647,7 +565,7 @@ export class GrassShader {
     }
 
     console.log(
-      `[GrassShader] chunked: "${sourceMesh.name}" ` +
+      `[GrassBlades] chunked: "${sourceMesh.name}" ` +
       `${this._cellTriangles.size} cells, density=${this._density}, cellSize=${cs}`
     );
 
@@ -689,7 +607,15 @@ export class GrassShader {
     const mat = new THREE.Matrix4();
 
     // Precompute barycentric data for all triangles
-    const triData = [];
+    const triData: {
+      ti: number,
+      wax: number, waz: number,
+      v0x: number, v0z: number,
+      v1x: number, v1z: number,
+      d00: number, d01: number, d11: number,
+      invDenom: number,
+    }[] = [];
+
     for (let ti = 0; ti < triCount; ti++) {
       const wi = ti * 9;
       const wax = worldVerts[wi],   waz = worldVerts[wi+2];
@@ -706,6 +632,20 @@ export class GrassShader {
 
       triData.push({ ti, wax, waz, v0x, v0z, v1x, v1z, d00, d01, d11, invDenom: 1 / det });
     }
+
+    // True if (x,z) lies inside any of this cell's triangles.
+    const isInside = (x: number, z: number) => {
+      for (let t = 0; t < triData.length; t++) {
+        const td = triData[t];
+        const v2x = x - td.wax, v2z = z - td.waz;
+        const d02 = td.v0x * v2x + td.v0z * v2z;
+        const d12 = td.v1x * v2x + td.v1z * v2z;
+        const bv = (td.d11 * d02 - td.d01 * d12) * td.invDenom;
+        const bw = (td.d00 * d12 - td.d01 * d02) * td.invDenom;
+        if (bv >= 0 && bw >= 0 && (1 - bv - bw) >= 0) return true;
+      }
+      return false;
+    };
 
     // Iterate a uniform grid across the cell, find containing triangle per point
     const startX = Math.floor(cellMinX / spacing) * spacing;
@@ -731,6 +671,19 @@ export class GrassShader {
           const bu = 1 - bv - bw;
 
           if (bu < 0 || bv < 0 || bw < 0) continue;
+          // Clump-fit: probe 6 rim points — full size, else half, else skip.
+          let clumpScale = 1.0;
+          let fits = false;
+          for (const r of [this._clumpRadius, this._clumpRadius * 0.5]) {
+            fits = true;
+            for (let p = 0; p < 6; p++) {
+              const ang = (p / 6) * Math.PI * 2;
+              if (!isInside(px + Math.cos(ang) * r, pz + Math.sin(ang) * r)) { fits = false; break; }
+            }
+            if (fits) break;
+            clumpScale *= 0.5;
+          }
+          if (!fits) { found = true; break; } // spills even at half — skip
 
           // Found containing triangle — interpolate position in local space
           const li = td.ti * 9;
@@ -765,7 +718,7 @@ export class GrassShader {
           quat.multiply(leanQuat);
 
           const hVar = 1.0 + (Math.random() - 0.5) * 2 * this._heightVariation;
-          scaleVec.set(1, hVar, 1);
+          scaleVec.set(clumpScale, hVar, clumpScale);
 
           mat.compose(position, quat, scaleVec);
           const elements = mat.elements;
@@ -922,7 +875,7 @@ export class GrassShader {
       instancedMesh.setMatrixAt(i, mat);
     }
     instancedMesh.instanceMatrix.needsUpdate = true;
-    console.log(`[GrassShader] ${count} blades on "${sourceMesh.name}"`);
+    console.log(`[GrassBlades] ${count} blades on "${sourceMesh.name}"`);
   }
 
   static _getSurfaceArea(mesh: THREE.Mesh) {

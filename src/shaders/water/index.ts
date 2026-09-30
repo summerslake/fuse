@@ -41,6 +41,11 @@ export class WaterSurface {
   water: THREE.Mesh;
   speed: number;
   private timeUniform: any;
+
+  /** Override to supply a custom UV node (e.g. world-space UVs for an ocean). */
+  protected uvNode(): any {
+    return uv();
+  }
   
   constructor(
     waterObject: THREE.Mesh,
@@ -57,6 +62,8 @@ export class WaterSurface {
 
     // this.mesh = new THREE.Mesh(geometry.clone(), this.material);
     this.water = new THREE.Mesh(waterObject.geometry.clone(), this.material);
+    // Render before other transparent meshes (grass/trees) so they blend over the water
+    this.water.renderOrder = -1;
     if (options.yOffset) {
       this.water.position.set(this.water.position.x, this.water.position.y - options.yOffset, this.water.position.z);
     }
@@ -155,7 +162,8 @@ export class WaterSurface {
     flowMapTexture.wrapS = flowMapTexture.wrapT = THREE.ClampToEdgeWrapping;
 
     
-    const baseUV = uv();
+    // const baseUV = uv();
+    const baseUV = this.uvNode();
     // Decode flow direction
     const flow = texture(flowMapTexture, baseUV).rg
       .sub(0.5)
@@ -185,7 +193,10 @@ export class WaterSurface {
     const blendedNormals = mix(n0, n1, blend);
 
     // Second layer: smaller ripples, different speed and angle for turbulence
-    const detailTiling = vec2(rangeX / tileSize * 2.3, rangeZ / tileSize * 2.3);
+    // const detailTiling = vec2(rangeX / tileSize * 2.3, rangeZ / tileSize * 2.3);
+    // 2.5 (not 2.3): keeps detail layer periodic on a 2-tile boundary so
+    // camera-following surfaces (ocean) can snap without a visible pop
+    const detailTiling = vec2(rangeX / tileSize * 2.5, rangeZ / tileSize * 2.5);    
     const detailTime = this.timeUniform.mul(0.23); // different speed
     const detailPhase0 = fract(detailTime);
     const detailPhase1 = fract(detailTime.add(0.5));

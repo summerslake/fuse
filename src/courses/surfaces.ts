@@ -8,7 +8,7 @@ export enum CourseSurfaceType {
   Sand = 'sand',
   Water = 'water',
   River = 'river',
-  CartPath = 'cart_path',
+  Concrete = 'concrete',
   PlaneLake = 'plane_lake',
   PlaneRiver = 'plane_river',
   PineStraw = 'pine_straw',
@@ -65,7 +65,8 @@ export const CourseSurfaces: Record<CourseSurfaceType, CourseSurfaceProperties> 
     spinGrip: 1.2,
     divot: 0.01,
     restitution: 0.3,
-    rollResistance: 0.09
+    rollResistance: 0.09,
+    stopSpeed: 0.20,
   },
   [CourseSurfaceType.Fairway]: {
     hasCollider: true,
@@ -79,27 +80,28 @@ export const CourseSurfaces: Record<CourseSurfaceType, CourseSurfaceProperties> 
     friction: 0.4,
     spinGrip: 1.0,
     restitution: 0.3,
-    rollResistance: 0.10
+    rollResistance: 0.10,
   },
   [CourseSurfaceType.Tee]: {
     hasCollider: true,
     friction: 0.3,
     restitution: 0.1,
-    rollResistance: 0.2
+    rollResistance: 0.2,
+    stopSpeed: 0.20,
   },
   [CourseSurfaceType.Rough]: {
     hasCollider: true,
-    friction: 0.2,
-    restitution: 0.2,
-    stopSpeed: 0.20,
-    rollResistance: 0.20,
+    friction: 0.3,
+    restitution: 0.25,
+    stopSpeed: 0.40,
+    rollResistance: 0.10,
   },
   [CourseSurfaceType.Base]: {
     hasCollider: true,
-    friction: 0.2,
-    restitution: 0.2,
-    rollResistance: 0.25,
-    stopSpeed: 0.30,
+    friction: 0.3,
+    restitution: 0.25,
+    rollResistance: 0.10,
+    stopSpeed: 0.40,
   },
   [CourseSurfaceType.Sand]: {
     hasCollider: true,
@@ -120,23 +122,23 @@ export const CourseSurfaces: Record<CourseSurfaceType, CourseSurfaceProperties> 
     restitution: 0.00,
     rollResistance: 1.00
   },
-  [CourseSurfaceType.CartPath]: {
+  [CourseSurfaceType.Concrete]: {
     hasCollider: true,
     friction: 0.3,
-    restitution: 0.50,
-    rollResistance: 0.01
+    restitution: 0.80,
+    rollResistance: 0.2
   },
   [CourseSurfaceType.PlaneLake]: {
     hasCollider: false,
     friction: 0.3,
     restitution: 0.50,
-    rollResistance: 0.01
+    rollResistance: 0.2
   },
   [CourseSurfaceType.PlaneRiver]: {
     hasCollider: false,
     friction: 0.3,
     restitution: 0.50,
-    rollResistance: 0.01
+    rollResistance: 0.2
   },
   [CourseSurfaceType.PineStraw]: {
     hasCollider: true,
@@ -148,7 +150,8 @@ export const CourseSurfaces: Record<CourseSurfaceType, CourseSurfaceProperties> 
     hasCollider: true,
     friction: 0.5,
     restitution: 0.02,
-    rollResistance: 0.05
+    rollResistance: 0.05,
+    stopSpeed: 0.30,
   },
 };
 

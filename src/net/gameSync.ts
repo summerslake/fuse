@@ -67,6 +67,7 @@ export class GameSync extends EventEmitter<GameSyncEvents> {
         surface: details.surface,
         isHoled: details.isHoled === true,
         isInWater: details.isInWater === true,
+        holeNumber: details.holeNumber,
       });
     });
 
@@ -92,6 +93,7 @@ export class GameSync extends EventEmitter<GameSyncEvents> {
       surface: result.surface as CourseColliderType | undefined,
       isHoled: result.isHoled,
       isInWater: result.isInWater,
+      holeNumber: result.holeNumber,
     });
     if (outcome.awaitingHazard) {
       // Nobody's turn advanced. Whoever owns this player has to answer, and

@@ -4,10 +4,12 @@ import EventEmitter from 'eventemitter3';
 import { BallPhysics, ShotEndEvent } from '@/physics/ballPhysics';
 import { BallTrail } from '@/objects/ballTrail';
 import { CourseColliderType, CourseSurfaceProperties, CourseSurfaceType } from '@/courses/surfaces';
+import { QualityMode } from '@/utils/quality';
 
 const FIXED_DT = 1 / 60;
 
 export interface GolfBallEvents {
+  beforeShotEnd: (event: ShotEndEvent) => void,
   shotEnded: (event: ShotEndEvent) => void,
   holedOut: () => void,
   landed: (velocity: number) => void
@@ -21,6 +23,8 @@ type GolfBallOptions = {
   /** Clear ball trail before the shot. Default is to clear when the shot ends. */
   clearTrail?: BallTrailClearMode;
   groundMeshes: THREE.Mesh[];
+  stimpLevel?: number;
+  qualityLevel?: QualityMode
 }
 
 export type ShotStats = {
@@ -57,6 +61,7 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
   trail?: BallTrail;
   physics: BallPhysics;
   clearTrail: BallTrailClearMode;
+  qualityLevel: QualityMode;
   #setupData: Partial<OpenGolfSim.SetupData>;
   #waitTime: number;
   #timeout?: number;
@@ -79,6 +84,7 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     this.clearTrail = options.clearTrail ?? 'end';
     this.#setupData = options.setupData;
     this.#waitTime = options.waitTime ?? 3000;
+    this.qualityLevel = options.qualityLevel ?? QualityMode.Low;
     this.#scene = scene;
     // this.#world = world;
     // this.#rapier = R;
@@ -99,7 +105,7 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     this.#scene.add(this.object);
 
     // Create physics once — reused across all shots
-    this.physics = new BallPhysics(this.object, this.radius, this.groundMeshes);
+    this.physics = new BallPhysics(this.object, this.radius, this.groundMeshes, options.setupData?.stimpLevel);
     this.physics.on('shotEnded', event => this._onShotEnded(event));
     this.physics.on('holedOut', () => this.emit('holedOut'));
     this.physics.on('landed', (v) => this.emit('landed', v));
@@ -134,7 +140,9 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     if (this.trail) {
       this.trail.reset(this.object);  // reuse existing instance
     } else {
-      this.trail = new BallTrail(this.#scene, this.object);
+      this.trail = new BallTrail(this.#scene, this.object, {
+        qualityLevel: this.qualityLevel,
+      });
     }
   }
 
@@ -159,12 +167,14 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     //   this.emit('shotEnded', event);
     //   return;
     // }
-    let waitTime = event.isInWater ? 500 : this.#waitTime;
+    // let waitTime = event.isInWater ? 500 : this.#waitTime;
+    this.emit('beforeShotEnd', event);
     clearTimeout(this.#timeout);
     this.#timeout = setTimeout(() => {
-      this.isShotActive = !!event.isInWater;
+      this.isShotActive = !this.#setupData.practiceMode && !!event.isInWater;
+      console.log(`[golfBall.shotEnded] isShotActive: ${this.isShotActive}`);
       this.emit('shotEnded', event);
-    }, waitTime);
+    }, this.#waitTime);
   }
 
   aimAt(aimPoint: THREE.Vector3) {
@@ -186,7 +196,7 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     return this.trail?.points.map(point => point.toArray())
   }
 
-  launchShot(shot: OpenGolfSim.Shot) {
+  launchShot(shot: OpenGolfSim.Shot, player?: OpenGolfSim.Player) {
     if (this.isShotActive) {
       return;
     }
@@ -208,6 +218,11 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     this.stats.startPosition = this.object?.position.clone();
 
     if (this.physics) {
+      if (player?.boost && player.boost > 1) {
+        const originalSpeed = shot.ballSpeed;
+        shot.ballSpeed = originalSpeed * player.boost;
+        console.log(`Boosting shot ${player.boost}x (${originalSpeed} -> ${shot.ballSpeed})`);
+      }
       this.physics.launchShot(shot, isPutt);
     }
   }
@@ -242,8 +257,8 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
     if (this.isShotActive && this.object) {
       const height = this.object.position.y - this.startPoint.y;
 
-      if (this.object.position.y > this.stats.apex) {
-        this.stats.apex = this.object.position.y;
+      if (height > this.stats.apex) {
+        this.stats.apex = height;
       }
       this.stats.total = this.startPoint.distanceTo(this.object.position);
 
@@ -259,7 +274,7 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
       }
 
       if (this.#frameNum % 4 === 0) {
-        this.stats.heightSamples.push(this.object.position.y);
+        this.stats.heightSamples.push(height);
         this.stats.lateralSamples.push(this.stats.lateral);
         this.stats.distanceSamples.push(this.stats.total);
       }

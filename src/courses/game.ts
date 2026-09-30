@@ -7,6 +7,8 @@ import EventEmitter from 'eventemitter3';
 import { CoursePlayer } from './player';
 import { DefaultGimmeDistances } from '@/utils/data';
 import { ShotEndEvent } from '@/physics/ballPhysics';
+import { app } from '@/index';
+import { OGSKeyCommands } from '@/app';
 
 // how far away from the tee box position to auto-aim at the pin instead of aim point
 const AIMPOINT_THRESHOLD = 25;
@@ -16,9 +18,33 @@ const DROP_RING_SAMPLES = 12;    // angular samples per ring
 const DROP_RAY_HEIGHT = 10;      // cast downward from this height above candidate
 const INVALID_DROP_SURFACES = ['plane_river', 'plane_lake', 'water', 'bunker', 'green'];
 
+const SCORE_LABELS: Record<string, string> = {
+  '-4': 'Condor',
+  '-3': 'Albatross',
+  '-2': 'Eagle',
+  '-1': 'Birdie',
+  '0': 'Par',
+  '1': 'Bogey',
+  '2': 'Double Bogey',
+  '3': 'Triple Bogey',
+  '4': 'Quadruple Bogey',
+};
+type ScoreResult = {
+  score: number;
+  toPar: number;
+  player: string;
+  label: string;
+}
+
 interface CourseGameEvents {
   nextShot: (player: CoursePlayer) => void;
+  playerHoleEnded: (score: ScoreResult) => void;
   roundEnded: () => void;
+  drop: () => void;
+  mulligan: () => void;
+  rehit: () => void;
+  /** networked mode: a hazard key command was pressed; the caller must route it via the relay */
+  hazardRequested: (action: HazardAction) => void;
 }
 // export type PlayerStatus = {
 //   player: CoursePlayer;
@@ -57,6 +83,8 @@ export type ShotResultInput = {
   isHoled: boolean,
   /** ball finished in a lake/river — unplayable, resolved via drop/rehit/mulligan */
   isInWater?: boolean,
+  /** which hole's surface the ball rests on — a green only counts on the hole in play */
+  holeNumber?: number,
 }
 
 /** What applyShotResult reports back to the caller. */
@@ -96,11 +124,14 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
    * penalty stroke on one client and desync the round.
    */
   #awaitingHazardFor: string | null = null;
+  gameMode: OpenGolfSim.SetupData['gameMode'];
+  #timeout?: number;
   // #playerData: Map<string, PlayerState>;
 
   constructor(course: CourseLoader, golfBall: GolfBall, options: CourseGameOptions) {
     super();
     this.course = course;
+    this.gameMode = course.gameMode || 'course';
     this.players = options?.setupData.players.map(player => new CoursePlayer(player));
     this.practiceMode = !!options?.setupData.practiceMode;
     this.golfBall = golfBall;
@@ -137,12 +168,29 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
           surface: details.surface,
           isHoled: details.isHoled === true,
           isInWater: details.isInWater === true,
+          holeNumber: details.holeNumber,
         });
       });
     }
 
     // setup first hole
     this._setupHole();
+
+    app.on('command', (key, state) => {
+      const action: HazardAction | undefined =
+        key.ogs_code === OGSKeyCommands.Drop ? 'drop'
+        : key.ogs_code === OGSKeyCommands.Mulligan ? 'mulligan'
+        : key.ogs_code === OGSKeyCommands.ReHit ? 'rehit'
+        : undefined;
+      if (!action) return;
+      // Multiplayer: applying it here would move only this client. Hand it to
+      // the network layer, which sends it and applies it on the echo.
+      if (this.networked) {
+        this.emit('hazardRequested', action);
+      } else {
+        this.applyHazardAction(this.activePlayer.id, action);
+      }
+    });
   }
 
   /** True when the player whose turn it is belongs to this client. */
@@ -198,7 +246,13 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     //   throw new Error('No player found!');
     // }
     const distFromStart = this.activePlayer.originalStart?.distanceTo(position) || 0;
-    if (this.activePlayer.pin && distFromStart > AIMPOINT_THRESHOLD) {
+    if (!this.activePlayer.pin) {
+      console.warn('No pin location!');
+      return;
+    }
+    if (this.gameMode === 'minigolf') {
+      this.activePlayer.aim = this.activePlayer.pin.clone();
+    } else if (distFromStart > AIMPOINT_THRESHOLD) {
       // playerState.aim ? playerState.aim.copy(playerState.pin) : playerState.aim = playerState.pin.clone();
       this.activePlayer.aim = this.activePlayer.pin.clone();
     }
@@ -213,10 +267,18 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     const holeKey = `${this.activeHole.number}`;
     const existingHoleScore = player.scorecard.get(holeKey);
     // finalize player hole score
-    const newHoleScore = existingHoleScore ? existingHoleScore + strokes : strokes;
+    const newHoleScore = (existingHoleScore ?? 0) + strokes;
     player.scorecard.set(holeKey, newHoleScore);
+    const scoreParDiff = newHoleScore - this.activeHole.par;
 
     if (endOfHole) {
+      player.finishHole(holeKey);
+      this.emit('playerHoleEnded', {
+        player: player.name,
+        score: newHoleScore,
+        toPar: scoreParDiff,
+        label: newHoleScore === 1 ? 'Hole in One!' : SCORE_LABELS?.[`${scoreParDiff}`]
+      });
       // Sum only the holes this player has actually finished. (Indexing by
       // currentHoleIndex would charge them par for holes still in progress —
       // and under shot-by-shot play a player can hole out while others are
@@ -228,6 +290,16 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
         return prev + diff;
       }, 0);
     }
+  }
+
+  /**
+   * A ball resting on a green only auto-putts out on the hole being played — not
+   * on a neighbouring hole's green it happened to reach.
+   */
+  _shouldAutoPutt(result: ShotResultInput) {
+    if (result.surface !== 'green' || this.puttingEnabled) return false;
+    // older network peers don't send holeNumber; treat that as "this hole"
+    return result.holeNumber === undefined || result.holeNumber === this.getActiveHoleNumber();
   }
 
   /**
@@ -263,7 +335,9 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       console.warn(`applyShotResult: result for ${playerId} but active player is ${this.activePlayer.id}`);
     }
 
-    this._addStrokes(player);
+    if (!this.practiceMode) {
+      this._addStrokes(player);
+    }
 
     // store for mulligans
     if (!player.previousStart) {
@@ -286,7 +360,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
         console.log(`Ball in hole! End hole`);
         this._addStrokes(player, 0, true);
         player.disabled = true;
-      } else if (result.surface === 'green' && !this.puttingEnabled) {
+      } else if (this._shouldAutoPutt(result)) {
         holeFinished = true;
         // total score
         // TODO: change to add auto-putt number
@@ -516,7 +590,9 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     if (this.localPlayerIds.has(playerId)) {
       this.golfBall.isShotActive = false;
     }
-    return this.#advanceTurn(false);
+    const outcome = this.#advanceTurn(false);
+    this.emit(action);
+    return outcome;
   }
 
   rehit() {

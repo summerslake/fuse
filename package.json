@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/module/fuse.js",
   "module": "dist/module/fuse.js",
+  "types": "dist/module/index.d.ts",
   "scripts": {
     "test": "vitest run",
     "server": "node server/index.js",
@@ -21,6 +22,8 @@
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.19.3",
     "@floating-ui/dom": "^1.7.6",
+    "@phosphor-icons/core": "^2.1.1",
+    "@phosphor-icons/web": "^2.1.2",
     "eventemitter3": "^5.0.4",
     "makio-meshline": "^1.4.0",
     "meshline": "^3.3.1",
@@ -39,7 +42,7 @@
     "serve": "^14.2.6",
     "typescript": "^6.0.3",
     "vite": "^6.4.2",
-    "vite-plugin-dts": "^4.5.4",
+    "vite-plugin-dts": "^5.1.0",
     "vitest": "^2.1.9"
   }
 }

@@ -95,6 +95,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     const defaults = options.defaults ?? {};
 
     this.element.className = styles.lobby;
+    this.element.setAttribute('data-no-gestures', '');
 
     this.#card = document.createElement('div');
     this.#card.className = styles.lobbyCard;
@@ -236,6 +237,7 @@ export class UILobby extends UIElementBase<UILobbyEvents> {
     // ---- in-game pill ----
     this.#pill = document.createElement('div');
     this.#pill.className = styles.lobbyPill;
+    this.#pill.dataset.noGestures = '';
     this.#pillLabel = document.createElement('span');
     const pillLeave = document.createElement('span');
     pillLeave.className = styles.lobbyPillLeave;

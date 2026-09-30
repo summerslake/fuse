@@ -9,6 +9,10 @@ body {
   background-color: var(--bg-color-solid);
   color: #fff;
 }
+h1, h2, h3, h4, h5 {
+  margin: var(--base-padding) 0;
+  padding: 0;
+}
 a {
   color: var(--primary-color);
   text-decoration: none;
@@ -27,7 +31,7 @@ ul li {
 }
 canvas {
   display: block;
-  background-color: #111;
+  /* background-color: #111; */
 }
 
 button {
@@ -76,5 +80,23 @@ button:hover {
   flex-wrap: nowrap;
   align-items: center;
   gap: calc(var(--grid-size) / 2);
+}
 
+#bottom-left {
+  position: absolute;
+  bottom: calc(var(--grid-size) / 4);
+  left: var(--grid-size);
+  display: flex;
+  flex-direction: column;
+}
+#bottom-right {
+  position: absolute;
+  bottom: calc(var(--grid-size) / 4);
+  right: var(--grid-size);
+  display: flex;
+  flex-direction: column;
+  gap: var(--grid-size);
+  max-width: 13vh;
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);  
 }

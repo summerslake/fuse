@@ -7,6 +7,7 @@ export class CoursePlayer {
   strokes = 0;
   toPar = 0;
   disabled: boolean;
+  boost: number;
   player: OpenGolfSim.Player;
   currentClub: OpenGolfSim.Club;
   previousStart?: THREE.Vector3;
@@ -16,6 +17,7 @@ export class CoursePlayer {
   aim?: THREE.Vector3;
   pin?: THREE.Vector3;
   scorecard: Map<string, number>;
+  finishedHoles: Set<string>;
 
   constructor(player: OpenGolfSim.Player) {
     this.player = player;
@@ -25,15 +27,17 @@ export class CoursePlayer {
     // Desktop's player manager arrives with `clubs` undefined, and reading
     // clubs[0] off that took the whole round down before it loaded.
     this.clubs = player.clubs?.length ? player.clubs : [...DefaultClubs];
+    this.boost = player.boost ?? 1;
     this.disabled = false;
 
     this.currentClub = this.clubs[0]; // select first
     this.scorecard = new Map();
+    this.finishedHoles = new Set();
     this.start = new THREE.Vector3(0, 0, 0);
   }
 
   hasFinishedHole(holeNumber: string) {
-    return this.scorecard.has(`${holeNumber}`);
+    return this.finishedHoles.has(`${holeNumber}`);
   }
 
   resetPositions(holeStart: THREE.Vector3, holePin: THREE.Vector3, holeAim?: THREE.Vector3) {
@@ -47,4 +51,8 @@ export class CoursePlayer {
     this.originalAim = holeAim?.clone();
     this.aim = holeAim?.clone();
   }
+
+  finishHole(holeNumber: string) {
+    this.finishedHoles.add(`${holeNumber}`);
+  }  
 }

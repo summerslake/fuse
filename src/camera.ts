@@ -55,7 +55,7 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
     const aspect = (window.innerWidth / window.innerHeight);
     const fov = options.fov ?? 20;
     const near = options.near ?? 2;
-    const far = options.far ?? 800;
+    const far = options.far ?? 500;
     super(fov, aspect, near, far);
     this.originalFov = fov;
     this.scene = options.scene;
@@ -69,7 +69,6 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
     this.autoPosition = options.autoPosition ?? false;
 
     this.#activeFrustumOffset = this.cameraOffsetX;
-    this.projectionMatrix.elements[8] = this.#activeFrustumOffset;
     this.shotDirection = new THREE.Vector3();
     this.staticCamPos = new THREE.Vector3();
     this.staticLookAt = new THREE.Vector3();
@@ -116,7 +115,6 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
     }
     this.aspect = width / height;
     this.updateProjectionMatrix();
-    this.projectionMatrix.elements[8] = this.#activeFrustumOffset;
   }
   
   applyFrustumOffset(dt: number, target: number, smooth: boolean) {
@@ -128,6 +126,13 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
       this.#activeFrustumOffset = target;
     }
     this.projectionMatrix.elements[8] = this.#activeFrustumOffset;
+  }
+  
+  updateProjectionMatrix() {
+    super.updateProjectionMatrix();
+    if (#activeFrustumOffset in this) {
+      this.projectionMatrix.elements[8] = this.#activeFrustumOffset;
+    }
   }
 
   setTracking(track: boolean, timeScale = 1) {
@@ -268,6 +273,7 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
 
       this.desiredCamPos.copy(targetPosition).addScaledVector(tmpBack, this.cameraTrackingOffsetYZ[1]);
       this.desiredCamPos.y += this.cameraTrackingOffsetYZ[0];
+      this.desiredCamPos.x += 1;
       this.desiredLookAt.copy(targetPosition);
       
       this.position.lerp(this.desiredCamPos, posSmooth);
@@ -292,4 +298,5 @@ export class ShotPerspectiveCamera extends THREE.PerspectiveCamera {
     if (aimChanged) return true;
     return false;
   }
+  
 }

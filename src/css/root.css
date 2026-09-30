@@ -1,28 +1,38 @@
 @import url('./fonts.css');
 
 :root {
+  --vhu: 40px;
   /* colors */
   --font-family: 'Rubik', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'Hack', 'Courier', monospace;
   --primary-color: #21d48d;
+  --danger-color: #d43f21;
+  --blue-color: #0a78c2;
+  --red-color: var(--danger-color);
   --hover-bg-color: rgb(255, 255, 255, 0.06);
   --active-bg-color: rgb(0, 0, 0, 0.3);
   --text-color: #ffffff;
+  --text-color-secondary: #cacaca;
   --bg-color-solid: #111c1c;
   --bg-color: rgba(17, 28, 28, 0.9);
   --text-disabled: #7e9a9a;
   --border-color: rgba(255, 255, 255, 0.2);
 
-  
+  --primary-color-light: oklch(from var(--primary-color) calc(l * 1.2) c h);
+  --primary-color-dark: oklch(from var(--primary-color) calc(l * 0.7) c h);
+
   /* spacing */
-  --border-radius: 0.6vh;
-  --grid-size: 5px;
+  --border-radius: 5px;
+  --grid-size: 8px;
   --base-padding: var(--grid-size);
 
   /* text */
   --base-font-size: 11px;
+  --tiny-font-size: 8px;
   --small-font-size: 8px;
   --medium-font-size: 12px;
   --large-font-size: 14px;
+  --xl-font-size: 18px;
   --unit-font-size: 7px;
 
   --shot-data-grid: repeat(2, 1fr);
@@ -30,6 +40,7 @@
 
 @media (min-height: 480px) {
   :root {
+    --vhu: 6vh;
     /* spacing */
     --border-radius: 0.6vh;
     --grid-size: 1.25vh;
@@ -37,9 +48,11 @@
 
     /* text */
     --base-font-size: 1.6vh;
+    --tiny-font-size: 1.0vh;
     --small-font-size: 1.2vh;
     --medium-font-size: 1.7vh;
     --large-font-size: 2.1vh;
+    --xl-font-size: 2.8vh;
     --unit-font-size: 0.9vh;
     --shot-data-grid: repeat(1, 1fr);
   }

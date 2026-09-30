@@ -16,6 +16,8 @@ export interface RosterPlayer {
   /** namespaced as `${ownerId}:${originalId}` — globally unique across clients */
   id: string;
   clubs: OpenGolfSim.Club[];
+  /** shot-speed multiplier from the host app; replays apply it so remote shots land true */
+  boost?: number;
   ownerId: string;
 }
 
@@ -40,6 +42,8 @@ export interface NetShotResult {
   isHoled: boolean;
   /** ball finished in water: the shooter owes a HazardMessage before play continues */
   isInWater?: boolean;
+  /** hole whose surface the ball rests on (a green only auto-putts on the hole in play) */
+  holeNumber?: number;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { UIHazardDialog } from '@/ui/UIHazardDialog';
 import { QualityMode } from '@/utils/quality';
+
 import {
   THREE,
   app,
@@ -28,11 +29,15 @@ import {
   type UILobbyJoinParams,
   type UILobbyCourse,
   type GameEventMessage,
+  type HazardAction,
+  UILaunchMonitor,
+  UIToast
  } from '@opengolfsim/fuse';
 
 const HoleOutSound = '../sounds/holeout.wav';
 const GroundThudSound = '../sounds/thud.wav';
 const Ktx2Path = '../ktx2/';
+const PostShotDelay = 3000;
 
 const gameContext: {
   isReady: boolean,
@@ -66,12 +71,14 @@ const gameContext: {
   courseMap?: UICourseMap,
   playerMenu?: UIPlayerMenu,
   mainMenu?: UIMainMenu,
+  launchMonitor?: UILaunchMonitor,
   loadingScreen?: UILoadingScreen,
   rangeFinder?: UIRangeFinder,
   stats?: UIStats,
   dialogs: {
     scorecard?: UIScorecard,
     hazard?: UIHazardDialog,
+    toast?: UIToast,
   },
   // Multiplayer
   net?: NetClient,
@@ -140,8 +147,7 @@ function launchShot(shot: OpenGolfSim.Shot) {
     // this is a real local shot, so GameSync should report its result
     gameContext.replayingRemoteShot = false;
     gameContext.shotData?.updateShotData(shot);
-    gameContext.golfBall.launchShot(shot);
-
+    gameContext.golfBall.launchShot(shot, gameContext.game?.activePlayer);
     // tracking scale controls how long we wait before tracking a shot between (0-150 MPH)
     const trackingScale = Math.min(shot.ballSpeed / 150, 1);
     gameContext.camera?.setTracking(true, trackingScale);
@@ -153,7 +159,7 @@ function launchShot(shot: OpenGolfSim.Shot) {
  * live (same physics, same camera-tracking as a local shot). Scoring still
  * arrives authoritatively via GameSync's 'shot' handler when it lands.
  */
-function flyRemoteShot(launch: { shot: OpenGolfSim.Shot, start: [number, number, number], aim: [number, number, number] }) {
+function flyRemoteShot(playerId: string, launch: { shot: OpenGolfSim.Shot, start: [number, number, number], aim: [number, number, number] }) {
   if (!gameContext.golfBall || !gameContext.game) return;
   if (gameContext.golfBall.isShotActive) return; // already flying (rare race)
 
@@ -171,10 +177,26 @@ function flyRemoteShot(launch: { shot: OpenGolfSim.Shot, start: [number, number,
   gameContext.camera?.setPositions(start, aim);
 
   gameContext.shotData?.updateShotData(launch.shot);
-  gameContext.golfBall.launchShot(launch.shot);
+  // the shooter's boost, so the replay lands where their real shot did
+  const shooter = gameContext.game.players.find((p) => p.id === playerId);
+  gameContext.golfBall.launchShot(launch.shot, shooter);
 
   const trackingScale = Math.min((launch.shot.ballSpeed || 100) / 150, 1);
   gameContext.camera?.setTracking(true, trackingScale);
+}
+
+/**
+ * Play a ball out of the water, from the dialog, a key or a host-app command.
+ * Multiplayer: send it and let the echo apply it, so this client moves at the
+ * same point in the log as everyone else. Solo: apply it right here.
+ */
+function resolveHazard(action: HazardAction) {
+  if (gameContext.gameSync) {
+    gameContext.gameSync.resolveHazard(action);
+  } else {
+    gameContext.game?.applyHazardAction(gameContext.game.activePlayer.id, action);
+  }
+  gameContext.dialogs.hazard?.close();
 }
 
 function setupNextShot() {
@@ -213,22 +235,17 @@ async function setupRenderer() {
   gameContext.renderer = new FuseRenderer({
     canvas,
     renderMode: 'webgpu',
+    adaptive: true,
+    forceWebGL: gameContext.setupData?.backend === 'webgl',
     qualityLevel: gameContext.qualityLevel,
-    // antialiasing costs real frames on a weak GPU, and Low exists for exactly
-    // that machine (this was the condition already written here, commented out)
-    antialias: gameContext.qualityLevel >= QualityMode.Medium
   });
 
   await gameContext.renderer.init();
 
-  let maxPixelRatio = Math.min(window.devicePixelRatio, 1);
-  if (gameContext.qualityLevel >= QualityMode.High) {
-    maxPixelRatio = Math.min(window.devicePixelRatio, 2);
-  }
-
   gameContext.camera = new ShotPerspectiveCamera(
     {
       autoPosition: true,
+      far: 2000,
       cameraOffsetX: (gameContext.setupData?.cameraOffset ? -(gameContext.setupData.cameraOffset / 100) : 0),
     }
   );
@@ -303,13 +320,15 @@ async function setupControls() {
   });
 
   // Controls
-  gameContext.controls = new CourseKeyboardControls({ testShots: true });
+  gameContext.controls = new CourseKeyboardControls({ testShots: true, swipeShots: true });
   gameContext.controls.on('aim', aimKeys => {
     if (gameContext.camera) gameContext.camera.aimKeys = aimKeys;
   });
   gameContext.controls.on('testShot', launchShot);
   gameContext.controls.on('toggleStats', () => gameContext.stats?.toggle());
-
+  gameContext.controls.on('mulligan', () => resolveHazard('mulligan'));
+  gameContext.controls.on('rehit', () => resolveHazard('rehit'));
+  gameContext.controls.on('scorecard', () => gameContext.dialogs.scorecard?.toggle());
 }
 
 /**
@@ -510,7 +529,8 @@ async function setupCourse() {
   // create the golf ball
   gameContext.golfBall = new GolfBall(gameContext.scene, {
     setupData: gameContext.setupData,
-    groundMeshes: gameContext.course.getGroundMeshes()
+    groundMeshes: gameContext.course.getGroundMeshes(),
+    waitTime: PostShotDelay
   });
   // gameContext.golfBall.on('landed', (velocity: number) => {
   //   gameContext.audioPlayer?.play(GroundThudSound, velocity);
@@ -524,7 +544,7 @@ async function setupCourse() {
     // multiplayer it isn't — this fires for replayed remote shots too, and the
     // authoritative result hasn't been round-tripped yet. GameSync raises the
     // prompt off the echo instead, only for a player we own.
-    if (!gameContext.net && result.isInWater) {
+    if (!gameContext.net && result.isInWater && !gameContext.setupData?.practiceMode) {
       gameContext.dialogs.hazard?.open();
     }
     app.sendShotResult(
@@ -562,7 +582,7 @@ async function setupCourse() {
     // skip those). GameSync handles the authoritative score when it lands.
     gameContext.net.on('launch', ({ playerId, launch }) => {
       if (!gameContext.game || gameContext.game.localPlayerIds.has(playerId)) return;
-      flyRemoteShot(launch);
+      flyRemoteShot(playerId, launch);
     });
 
     // Catch up on anything that happened while we were loading (or before we
@@ -592,29 +612,46 @@ async function setupCourse() {
     console.log(`The round is over!`);
     gameContext.dialogs.scorecard?.open();
   });
+  gameContext.game?.on('playerHoleEnded', (result) => {
+    console.log(`A player has finished the hole`, result);
+    gameContext.dialogs.toast?.show(
+      result.player,
+      `${result.label} (${result.score})`,
+      PostShotDelay
+    );
+  });
+  gameContext.game.on('mulligan', () => {
+    gameContext.dialogs.hazard?.close();
+  });
+  gameContext.game.on('rehit', () => {
+    gameContext.dialogs.hazard?.close();
+  });
+  gameContext.game.on('drop', () => {
+    gameContext.dialogs.hazard?.close();
+  });
 
   gameContext.shotData = new UIShotData('#shot-data', { units: gameContext.setupData?.units });
   gameContext.rangeFinder = new UIRangeFinder('#top-center', { units: gameContext.setupData?.units });
   gameContext.mainMenu = new UIMainMenu('#top-left');
+  gameContext.mainMenu.on('stats', () => gameContext.stats?.toggle());
   
+  if (gameContext.setupData?.showLaunchStatus) {
+    gameContext.launchMonitor = new UILaunchMonitor('#lm-status');
+  }
+  
+  gameContext.dialogs.toast = new UIToast("#toast");
+
   gameContext.dialogs.scorecard = new UIScorecard('#scorecard', {
     players: gameContext.game?.players || [],
     holes: gameContext.course.holes
   });
   gameContext.dialogs.hazard = new UIHazardDialog('#hazard', { preventClose: true });
   for (const action of ['drop', 'mulligan', 'rehit'] as const) {
-    gameContext.dialogs.hazard.on(action, () => {
-      // Multiplayer: send it and let the echo apply it, so this client moves at
-      // the same point in the log as everyone else. Solo: apply it right here.
-      if (gameContext.gameSync) {
-        gameContext.gameSync.resolveHazard(action);
-      } else {
-        gameContext.game?.applyHazardAction(gameContext.game.activePlayer.id, action);
-      }
-      gameContext.dialogs.hazard?.close();
-    });
+    gameContext.dialogs.hazard.on(action, () => resolveHazard(action));
   }
+  gameContext.game.on('hazardRequested', resolveHazard);
 
+  gameContext.mainMenu.on('help', () => app.help())
   gameContext.mainMenu.on('exit', () => app.exit())
 
   gameContext.playerMenu = new UIPlayerMenu('#top-left', { players: gameContext.game?.players || [] });
@@ -670,14 +707,34 @@ function preLoad() {
     const practiceMode = practiceParam === '1' || practiceParam === 'true';
     if (gameContext.setupData) gameContext.setupData.practiceMode = practiceMode;
   }
+  const stimpParam = params.get('stimp');
+  if (stimpParam) {
+    const stimpValue = Math.max(Math.min(parseInt(stimpParam, 10), 14), 6);
+    console.log(`setting stimp: ${stimpValue}`);
+    if (gameContext.setupData && stimpValue) gameContext.setupData.stimpLevel = stimpValue;
+  }
+  const puttingParam = params.get('putting');
+  if (puttingParam) {
+    const puttingEnabled = puttingParam === '1' || puttingParam === 'true';
+    if (puttingEnabled && gameContext.setupData) gameContext.setupData.puttingEnabled = puttingEnabled;
+  }
+
+  const backendParam = params.get('backend');
+  if (backendParam === 'webgl') {
+    if (gameContext.setupData) gameContext.setupData.backend = 'webgl';
+  } else if (backendParam === 'webgpu') {
+    if (gameContext.setupData) gameContext.setupData.backend = 'webgpu';
+  }
 
   console.log('[debug] Setup Data', gameContext.setupData);
   gameContext.loadingScreen = new UILoadingScreen(document.body, { loadingPrefix: 'Loading Course' });
   gameContext.loadingScreen.on('load', (error) => {
-    gameContext.stats = new UIStats('#render-stats', { hidden: false, renderer: gameContext.renderer?.renderer }); // start hidden (press S to toggle)
+    gameContext.stats = new UIStats('#render-stats', { hidden: true, renderer: gameContext.renderer?.renderer }); // start hidden (press S to toggle)
     if (!error) {
       requestAnimationFrame(animate);
       gameContext.isReady = true;
+      gameContext.renderer?.startAdaptiveResolution();
+      app.setLoaded();
     }
   });
   // The loading screen shows only the message, and a host app gives us no
@@ -708,7 +765,7 @@ function animate(animDelta: number) {
   gameContext.renderer?.clear();
 
   gameContext.controls?.update(delta);
-  gameContext.clouds?.update(delta);
+  // gameContext.clouds?.update(delta);
 
   if (gameContext.camera && gameContext.golfBall && gameContext.isReady) {
     gameContext.course?.update(delta, gameContext.camera, gameContext.golfBall, gameContext.game?.getActiveHoleNumber());
@@ -758,6 +815,9 @@ function animate(animDelta: number) {
       }
 
       if (gameContext.camera) {
+        if (gameContext.renderer) {
+          gameContext.renderer.adaptiveHold = !!gameContext.golfBall?.isShotActive;
+        }
         gameContext.renderer?.render(gameContext.scene, gameContext.camera, gameContext.fog);
       }
     }
@@ -958,7 +1018,7 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     if (gameContext.roundStarted) return;
     gameContext.roundStarted = true;
     // Replace our local player list with the full server roster (namespaced ids).
-    gameContext.setupData!.players = roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs }));
+    gameContext.setupData!.players = roster.map((p) => ({ name: p.name, id: p.id, clubs: p.clubs, boost: p.boost }));
     gameContext.localPlayerIds = roster
       .filter((p) => p.ownerId === gameContext.clientId)
       .map((p) => p.id);
@@ -1029,7 +1089,7 @@ app.initialize(() => {
     return;
   }
   // if we passed a test course URL as a query param, we start in debug mode
-  if (window.location.search) {
+  if (app.appType === 'web') {
     initializeDebug();
   }
 });

@@ -1,4 +1,3 @@
-import { type World } from '@dimforge/rapier3d-compat';
 import {
   THREE,
   app,
@@ -16,16 +15,17 @@ import {
   VolumetricClouds,
   MeshLoader,
   YardageLinesMaterial,
-  FlatGrassShaderMaterial,
   CourseSurfaces,
   generateSetupData,
   CoursePlayer,
   UIPlayerMenu,
   UIMainMenu,
   CourseSurfaceType,
-  FuseRenderer
+  FuseRenderer,
+  UILaunchMonitor
 } from '@opengolfsim/fuse';
 import rangeMtnsModel from './models/rangeMtns.glb?url';
+import bagStandModel from './models/bagstand.glb?url';
 import fairwayTexture from './textures/gen_fairway_tex.png?url';
 import fairwayMap from './textures/gen_fairway_map.png?url';
 import { PlayerState } from '@/courses/types';
@@ -43,7 +43,6 @@ const gameContext: {
   currentPlayer?: CoursePlayer,
   // Environment
   timer: THREE.Timer,
-  world?: World,
   scene?: THREE.Scene,
   renderer?: FuseRenderer,
   golfBall?: GolfBall,
@@ -66,6 +65,7 @@ const gameContext: {
   stats?: UIStats,
   playerMenu?: UIPlayerMenu,
   mainMenu?: UIMainMenu,
+  launchMonitor?: UILaunchMonitor,
   
   // Controls
   camera?: ShotPerspectiveCamera,
@@ -88,7 +88,7 @@ const gameContext: {
 
 function launchShot(shot: OpenGolfSim.Shot) {
   if (shot.ballSpeed && !gameContext.golfBall?.isShotActive) {
-    gameContext.golfBall?.launchShot(shot);
+    gameContext.golfBall?.launchShot(shot, gameContext.currentPlayer);
     gameContext.shotData?.updateShotData(shot);
     // start tracking after a delay based on ball speed
     // the default is 3 seconds
@@ -105,9 +105,10 @@ async function setupWorld() {
   
   gameContext.renderer = new FuseRenderer({
     canvas,
-    antialias: true,
+    adaptive: true,
     renderMode: 'webgpu',
-    qualityLevel: gameContext.setupData?.qualityLevel ?? 2
+    forceWebGL: gameContext.setupData?.backend === 'webgl',
+    qualityLevel: gameContext.setupData?.qualityLevel ?? 1
   });
 
   await gameContext.renderer.init();
@@ -115,7 +116,6 @@ async function setupWorld() {
 
 
 async function createGroundPlane() {
-  // if (!app.world) throw new Error('Missing physics world. Did you call app.initialize() first?');
   if (!gameContext.scene) throw new Error('Missing base scene');
   const rangeWidth = 500;
   const rangeHeight = 700;
@@ -142,6 +142,7 @@ async function createGroundPlane() {
     name: 'floor',
     map: grassTexture,
     normalMap: grassNormalMap,
+    color: new THREE.Color('#fce3ff'),
     roughness: 1,
     metalness: 0,
   });
@@ -187,18 +188,13 @@ async function createGroundPlane() {
     {
       lineWidth:  0.5,
       lineLength: 50,
+      maxTextureSize: gameContext.renderer?.getMaxTextureSize(),
       labels: hashMarks,
       lineColor:  [1, 1, 1, 0.5],
       feather:    0.2,   // 10% soft fade at each end
       texelsPerMeter: 40
     }
   );
-
-  // @ts-expect-error
-  gameContext.ground.material = new FlatGrassShaderMaterial(gameContext.ground.material, {
-    blendNoiseScale: 0.1,
-  });
-
 
   await loadMountain(grassTexture, grassNormalMap);
 }
@@ -230,6 +226,19 @@ async function loadMountain(
   gameContext.mountain.position.set(0, -12, offsetZ);
   gameContext.mountain.scale.set(20, 20, 20);
   gameContext.scene?.add(gameContext.mountain);
+  
+  
+  const bagStand = await gameContext.meshLoader?.load(bagStandModel);
+  if (!bagStand) {
+    console.warn('Unable to load mountain mesh!');
+    return;
+  }
+  
+  bagStand.rotation.y = THREE.MathUtils.degToRad(180);
+  // bagStand.rotation.set(0, -Math.PI / 2, 0);
+  bagStand.position.set(-2, 0.1, 0);
+  gameContext.scene?.add(bagStand);
+  
 }
 
 async function setupRange() {
@@ -246,6 +255,7 @@ async function setupRange() {
   }
   gameContext.meshLoader = new MeshLoader(gameContext.renderer, gameContext.loadingScreen?.manager);
 
+  
   gameContext.scene = new THREE.Scene();
   gameContext.scene.background = skyColor;
   gameContext.lightGroup = new CourseLight({
@@ -278,15 +288,18 @@ async function setupRange() {
   gameContext.scene.add(gameContext.visualAimPoint.object);
 
 
-  gameContext.controls = new CourseKeyboardControls({ testShots: true });
+  gameContext.controls = new CourseKeyboardControls({ testShots: true, swipeShots: true });
   gameContext.controls.on('aim', aimKeys => {
     if (gameContext.camera) gameContext.camera.aimKeys = aimKeys;
   });
   gameContext.controls.on('toggleStats', () => gameContext.stats?.toggle());
   gameContext.controls.on('testShot', shot => launchShot(shot));
   
+  if (gameContext.setupData?.showLaunchStatus) {
+    gameContext.launchMonitor = new UILaunchMonitor('#lm-status');
+  }
   // start hidden (press S to toggle)
-  gameContext.stats = new UIStats('#render-stats', { hidden: false });
+  gameContext.stats = new UIStats('#render-stats', { hidden: true, renderer: gameContext.renderer?.renderer });
 
   // Sky/Clouds
   gameContext.clouds = new VolumetricClouds(gameContext.camera, {
@@ -317,7 +330,9 @@ async function setupRange() {
   console.log('gameContext.setupData?.players', gameContext.setupData?.players);
 
   gameContext.mainMenu = new UIMainMenu('#top-left');
-  gameContext.mainMenu.on('exit', () => app.exit())
+  gameContext.mainMenu.on('stats', () => gameContext.stats?.toggle());
+  // gameContext.mainMenu.on('help', () => app.help())
+  // gameContext.mainMenu.on('exit', () => app.exit())
   gameContext.playerMenu = new UIPlayerMenu('#top-left', {
     // setupData: gameContext.setupData,
     players: [gameContext.currentPlayer]
@@ -340,6 +355,8 @@ async function preLoad() {
   gameContext.loadingScreen = new UILoadingScreen(document.body, { loadingPrefix: 'Hitting the range' });
   gameContext.loadingScreen.on('load', () => {
     requestAnimationFrame(animate);
+    gameContext.renderer?.startAdaptiveResolution();
+    app.setLoaded();
   });
   gameContext.loadingScreen.load(setupRange);
   document.body.style.opacity = '1';
@@ -368,38 +385,6 @@ async function initializeSetup(payload: any) {
 async function initializeDebug() {
   gameContext.setupData = generateSetupData(1);
   preLoad();
-  document.getElementById('debug-message')?.setAttribute('style', 'display: block;');
-}
-
-
-function testSetupData() {
-  const clubs = [
-    { fullName: 'Driver', name: 'DR', id: 'DR', distance: 180 },
-    { fullName: '5 Iron', name: '5i', id: '5I', distance: 150 },
-    { fullName: 'Pitching Wedge', name: 'PW', id: 'PW', distance: 100 },
-    { fullName: 'Putter', name: 'P', id: 'PT', distance: 0 }
-  ];
-  return {
-    units: 'imperial',
-    players: [
-      {
-        name: 'Player One',
-        id: 'player-1',
-        clubs: [...clubs]
-      },
-      {
-        name: 'Player Two',
-        id: 'player-2',
-        clubs: [...clubs]
-      }
-    ],
-    cameraOffset: 0,
-    puttingEnabled: false,
-    gimmesEnabled: true,
-    gimmeDistances: [10, 20],
-    elevation: 0,
-    gameMode: 2,
-  }
 }
 
 function clubChange(club: OpenGolfSim.Club) {

@@ -34,7 +34,7 @@ export class UIStatsPanel {
     this.fg = fg;
     this.bg = bg;
 
-    this.pixelRatio = Math.round( window.devicePixelRatio || 1 );
+    this.pixelRatio = window.devicePixelRatio || 1;
 
     this.width = 80 * this.pixelRatio;
     this.height = 48 * this.pixelRatio;
@@ -42,22 +42,22 @@ export class UIStatsPanel {
     this.#text_y = 2 * this.pixelRatio;
     this.#graph = {
       x: 3 * this.pixelRatio,
-      y: 15 * this.pixelRatio,
+      y: 10 * this.pixelRatio,
       width: 74 * this.pixelRatio,
       height: 30 * this.pixelRatio
     };
 
-    this.dom = document.createElement( 'canvas' );
+    this.dom = document.createElement('canvas');
     this.dom.width = this.width;
     this.dom.height = this.height;
-    this.dom.style.cssText = 'width:80px;height:48px';
+    // this.dom.style.cssText = 'width:80px;height:48px';
 
     const ctx = this.dom.getContext( '2d' );
     if (!ctx) {
       throw new Error('Unable to create context');
     }
     this.context = ctx;
-    this.context.font = 'bold ' + ( 9 * this.pixelRatio ) + 'px Helvetica,Arial,sans-serif';
+    this.context.font = 'bold ' + ( 6 * this.pixelRatio ) + 'px Helvetica,Arial,sans-serif';
     this.context.textBaseline = 'top';
 
     this.context.fillStyle = bg;
@@ -117,15 +117,19 @@ export class UIStats {
   element: HTMLElement | null;
   container: HTMLElement;
   mode = 0;
+  title: HTMLElement;
   msPanel: UIStatsPanel;
   fpsPanel: UIStatsPanel;
+  memoryPanel: UIStatsPanel;
   drawCallsPanel: UIStatsPanel;
   /** shows which graphics API is actually in use */
   backend!: HTMLElement;
   renderer?: WebGLRenderer | WebGPURenderer;
+  gpuBudgetMB = 256;
   #beginTime = 0;
   #prevTime = 0;
   #frames = 0;
+  #prevCalls = 0;
 
   constructor(element: string | HTMLElement, options: UIStatsOptions = {}) {
     if (typeof element === 'string') {
@@ -142,13 +146,14 @@ export class UIStats {
     this.container = document.createElement('div');
     // this.container.style.cssText = 'position:fixed;top:0;left:0;cursor:pointer;opacity:0.9;z-index:10000';
 	  this.container.addEventListener('click', (event) => this.#handleClick(event), false);
-    Object.assign(this.container.style, {
-      position: 'fixed',
-      width: '80px',
-      bottom: '10px',
-      right: '10px',
-      zIndex: '9999'
-    });
+    // Object.assign(this.container.style, {
+    //   position: 'fixed',
+    //   width: '80px',
+    //   height: '48px',
+    //   bottom: '10px',
+    //   right: '10px',
+    //   zIndex: '9999'
+    // });
     
     this.container.style.display = options.hidden ? 'none' : 'block';
     this.container.style.display = options.hidden ? 'none' : 'block';
@@ -157,11 +162,23 @@ export class UIStats {
     this.begin();
     this.#prevTime = this.#beginTime;
 
-    this.fpsPanel = new UIStatsPanel( 'FPS', '#21d48d', '#111c1c' );
+    this.title = document.createElement('div');
+    
+    // @ts-expect-error
+    console.log('this.renderer?.backend', this.renderer?.backend);
+    // @ts-expect-error
+    this.title.textContent = `${this.renderer?.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL'}`;
+    this.title.className = styles.statsTitle;
+    this.container.append(this.title);
+
+    this.fpsPanel = new UIStatsPanel( 'FPS', '#a3eccf', '#111c1c' );
     this.container.append(this.fpsPanel.dom);
-    this.msPanel = new UIStatsPanel( 'MS', 'rgb(255, 8, 0)', 'rgb(34, 11, 0)' );
+    this.msPanel = new UIStatsPanel( 'MS FRAME', 'rgb(229, 141, 138)', 'rgb(34, 11, 0)' );
     this.container.append(this.msPanel.dom);
-    this.drawCallsPanel = new UIStatsPanel( 'DRAWS', 'rgb(169, 115, 255)', 'rgb(34, 0, 50)' );
+    this.memoryPanel = new UIStatsPanel( 'MEMORY', 'rgb(185, 220, 248)', 'rgb(24, 28, 36)' );
+    this.container.append(this.memoryPanel.dom);
+
+    this.drawCallsPanel = new UIStatsPanel( 'DRAWS', 'rgb(206, 176, 255)', 'rgb(15, 10, 17)' );
     this.container.append(this.drawCallsPanel.dom);
     this.showPanel(0);
 
@@ -205,6 +222,14 @@ export class UIStats {
 
   begin() {
 		this.#beginTime = ( performance || Date ).now();
+    
+    if (this.title) {
+      this.title.textContent = [
+        // @ts-expect-error
+        `${this.renderer?.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL'}`,
+        `(@${this.renderer?.getPixelRatio().toFixed(1)})`
+      ].join(' ');
+    }
     // return this.stats.begin();
   }
 
@@ -220,12 +245,14 @@ export class UIStats {
 
       this.#prevTime = time;
       this.#frames = 0;
-
-
     }
+    
 
     if (this.renderer) {
-      this.drawCallsPanel.update(this.renderer.info.render.calls || 0, 100);
+      // @ts-expect-error - info shape differs between WebGL/WebGPU types
+      this.memoryPanel.update((this.renderer.info.memory.total || 0) / 1048576, this.gpuBudgetMB);
+      // @ts-expect-error
+      this.drawCallsPanel.update(this.renderer.info.render.drawCalls || 0, 200);
     }
 
     return time;
@@ -235,15 +262,18 @@ export class UIStats {
 	  this.#beginTime = this.end();
   }
   
+  #panels() {
+    return [this.fpsPanel, this.msPanel, this.memoryPanel, this.drawCallsPanel];
+  }
+
   #handleClick(event: PointerEvent) {
     event.preventDefault();
-    // count the panels, not the container's children — the backend label is a
-    // child too, and cycling onto it would blank the graph
-    this.showPanel( ++ this.mode % 3 );
+    // this.showPanel( ++ this.mode % this.container.children.length );
+    this.showPanel( ++ this.mode % this.#panels().length );
   }
   
 	showPanel(id: number) {
-		const panels = [this.fpsPanel, this.msPanel, this.drawCallsPanel];
+		const panels = this.#panels();
     for ( var i = 0; i < panels.length; i ++ ) {
 			panels[i].dom.style.display = i === id ? 'block' : 'none';
 		}

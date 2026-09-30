@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as THREE from 'three';
 import { CourseGame } from '@/courses/game';
+import { app } from '@/index';
+import { OGSKeyCommands } from '@/app';
 import { type Hole } from '@/courses/types';
 
 /**
@@ -331,5 +333,49 @@ describe('CourseGame — networked mode', () => {
     expect(out.holeFinished).toBe(false);
     expect(g.activePlayer.id).toBe('p2');             // away rotation runs in networked mode too
     expect(player(g, 'p1').scorecard.get('1')).toBe(1);
+  });
+});
+
+describe('CourseGame — merged from upstream', () => {
+  it('only auto-putts on the green of the hole being played', () => {
+    const g = makeGame();
+    play(g, { ...green(140), holeNumber: 2 });        // reached hole 2's green from hole 1
+    expect(player(g, 'p1').disabled).toBe(false);
+    expect(player(g, 'p1').scorecard.get('1')).toBe(1); // just the stroke, no auto-putt
+
+    play(g, { ...green(145), holeNumber: 1 });        // p2 on the right green
+    expect(player(g, 'p2').disabled).toBe(true);
+  });
+
+  it('announces each finished hole with its score label', () => {
+    const g = makeGame(['p1']);
+    const ended: any[] = [];
+    g.on('playerHoleEnded', (r) => ended.push(r));
+    play(g, fairway(100));
+    play(g, { endPosition: V(0, 0, 150), surface: 'green', isHoled: true });
+    expect(ended).toEqual([{ player: 'p1', score: 2, toPar: -1, label: 'Birdie' }]);
+  });
+
+  it('keeps no score in practice mode', () => {
+    const g = new CourseGame(makeCourse(), fakeBall, {
+      setupData: { ...makeSetup(['p1']), practiceMode: true } as any,
+    });
+    play(g, fairway(30));
+    expect(player(g, 'p1').strokes).toBe(0);
+  });
+
+  it('hands host-app hazard commands to the network layer when networked', () => {
+    const g = new CourseGame(makeCourse(), fakeBall, {
+      setupData: makeSetup(['p1', 'p2']) as any,
+      networked: true,
+    });
+    play(g, water(60));
+    const requested: string[] = [];
+    g.on('hazardRequested', (a) => requested.push(a));
+    app.emit('command', { ogs_code: OGSKeyCommands.Mulligan } as any, 'down');
+    expect(requested).toEqual(['mulligan']);
+    // nothing applied locally — the relay echo does that on every client
+    expect(player(g, 'p1').scorecard.get('1')).toBe(1);
+    expect(g.activePlayer.id).toBe('p1');
   });
 });

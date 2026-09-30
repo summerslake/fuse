@@ -6,7 +6,8 @@ import { UIElementBase } from './UIElementBase';
 
 type UIPlayerMenuOptions = {
   players: CoursePlayer[],
-  disablePutting?: boolean
+  disablePutting?: boolean,
+  disableScore?: boolean,
 };
 
 interface UIPlayerMenuEvents {
@@ -21,9 +22,11 @@ export class UIPlayerMenu extends UIElementBase<UIPlayerMenuEvents> {
   wrapper?: HTMLElement;
   playerNameAvatar?: HTMLElement;
   playerNameText?: HTMLElement;
+  playerBoostText?: HTMLElement;
   playerClub?: HTMLElement;
   playerScore?: HTMLElement;
   disablePutting: boolean;
+  disableScore: boolean;
   allPlayers: CoursePlayer[];
 
   constructor(parent: string | Element, options: UIPlayerMenuOptions) {
@@ -32,6 +35,7 @@ export class UIPlayerMenu extends UIElementBase<UIPlayerMenuEvents> {
     this.element.className = styles.playerMenu;
 
     this.disablePutting = !!options.disablePutting;
+    this.disableScore = !!options.disableScore;
 
     if (!options.players?.length) {
       throw new Error('No players found in options');
@@ -49,7 +53,6 @@ export class UIPlayerMenu extends UIElementBase<UIPlayerMenuEvents> {
       this.wrapper.remove();
     }
     const firstPlayer = this.allPlayers?.[0];
-
     this.wrapper = document.createElement('div');
     this.wrapper.setAttribute('id', 'ui-player-menu');
     this.wrapper.className = styles.playerMenuContainer;
@@ -59,23 +62,31 @@ export class UIPlayerMenu extends UIElementBase<UIPlayerMenuEvents> {
     // playerName.append(this.playerNameAvatar);
     this.playerNameText = document.createElement('div');
     this.playerNameText.className = styles.playerMenuNameText;
+    this.playerNameText.textContent = firstPlayer.name || '(No Player)';
+    
+    this.playerBoostText = document.createElement('div');
+    this.playerBoostText.classList.add(styles.playerMenuBoostText);
+    this.playerBoostText.textContent = `${firstPlayer.boost}x`;
 
     const playerName = document.createElement('a');
     playerName.className = styles.playerMenuName;
-    this.playerNameText.textContent = firstPlayer.name || '(No Player)';
-    playerName.append(this.playerNameText);
+    
+    playerName.append(this.playerNameText, this.playerBoostText);
     
     this.playerClub = document.createElement('div');
     this.playerClub.className = styles.playerMenuClub;
     this.playerClub.textContent = 'DR';
     
-    this.playerScore = document.createElement('a');
-    // this.playerScore.className = styles.playerMenuScore;
-    this.playerScore.textContent = 'E';
-    this.playerScore.classList.add(styles.playerMenuScore, styles.clickableArea);
-    this.playerScore.addEventListener('click', () => this.emit('showScorecard'));
+    this.wrapper.append(playerName, this.playerClub);
+    if (!this.disableScore) {
+      this.playerScore = document.createElement('a');
+      // this.playerScore.className = styles.playerMenuScore;
+      this.playerScore.textContent = 'E';
+      this.playerScore.classList.add(styles.playerMenuScore, styles.clickableArea);
+      this.playerScore.addEventListener('click', () => this.emit('showScorecard'));
+      this.wrapper.append(this.playerScore);
+    }
     
-    this.wrapper.append(playerName, this.playerClub, this.playerScore);
   
     this.element.append(this.wrapper);
 
@@ -105,8 +116,21 @@ export class UIPlayerMenu extends UIElementBase<UIPlayerMenuEvents> {
   }
 
   update(player: CoursePlayer) {
-    if (this.playerNameText) this.playerNameText.textContent = player.name;
-    if (this.playerClub) this.playerClub.textContent = player.currentClub?.name || 'NA';
+    if (this.playerNameText) {
+      this.playerNameText.textContent = player.name;
+    }
+    if (this.playerBoostText) {
+      if (player.boost && player.boost > 1) {
+        this.playerBoostText.textContent = `${player.boost}x`;
+        this.playerBoostText.classList.remove(styles.playerBoostTextHidden);
+      } else {
+        this.playerBoostText.textContent = '';
+        this.playerBoostText.classList.add(styles.playerBoostTextHidden);
+      }
+    }
+    if (this.playerClub) {
+      this.playerClub.textContent = player.currentClub?.name || 'NA';
+    }
     if (this.playerScore) {
       const val = !player.toPar ? 'E' : `${player.toPar > 0 ? '+' + player.toPar : player.toPar}`;
       this.playerScore.textContent = val;

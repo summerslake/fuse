@@ -1,6 +1,6 @@
 import { GolfBall } from '@/objects/golfBall';
 import * as THREE from 'three/webgpu';
-import { MeshStandardNodeMaterial } from 'three/webgpu';
+import { MeshStandardNodeMaterial, type Node, type UniformNode } from 'three/webgpu';
 import {
   vec3, vec4, float,
   uniform as tslUniform,
@@ -8,15 +8,18 @@ import {
   smoothstep as tslSmoothstep, mix, max,
   fwidth, Fn, Discard,
 } from 'three/tsl';
+import { GrassSurface, GrassSurfaceOptions } from './grassSurface';
 
 export type TargetShaderMaterialOptions = {
   gimmeDistances: number[],
   ringWidth?: number,
-  puttingEnabled?: boolean
+  puttingEnabled?: boolean,
+  surfaceOptions?: GrassSurfaceOptions,
 };
 
 // --- TSL helper: anti-aliased ring outline ---
-const ringOutline = Fn(([dist, radius, width]: [any, any, any]) => {
+const ringOutline = Fn(([dist, radius, width]: [Node<'float'>, Node<'float'>, Node<'float'>]) => {
+
   const hw = width.mul(0.5);
   const fw = fwidth(dist);
   const edge = max(fw, float(0.01));
@@ -28,7 +31,7 @@ const ringOutline = Fn(([dist, radius, width]: [any, any, any]) => {
 });
 
 // --- TSL helper: anti-aliased zone fill between two radii ---
-const zoneFill = Fn(([dist, lo, hi]: [any, any, any]) => {
+const zoneFill = Fn(([dist, lo, hi]: [Node<'float'>, Node<'float'>, Node<'float'>]) => {
   const fw = fwidth(dist);
   const edge = max(fw, float(0.01));
   const inner = tslSmoothstep(lo.sub(edge), lo.add(edge), dist);
@@ -45,6 +48,7 @@ export class TargetShaderMaterial {
   lerpSpeed = 4.0;
   holePosUniform: any;
   ringActiveUniform: any;
+  visibleUniform: UniformNode<'float', number>;
   glowIntensityUniform: any;
 
   material?: MeshStandardNodeMaterial;
@@ -60,46 +64,50 @@ export class TargetShaderMaterial {
     // Dynamic uniforms (updated at runtime)
     this.holePosUniform = tslUniform(new THREE.Vector3(holeWorldPos.x, 0, holeWorldPos.z));
     this.ringActiveUniform = tslUniform(new THREE.Vector3(0, 0, 0));
+    this.visibleUniform = tslUniform(1.0); // 0 = hidden, 1 = shown
     // this.glowIntensityUniform = tslUniform(1.5); // > 1.0 so bloom picks it up
-    const glowIntensity = float(4.0); // baked into the shader
+    const glowIntensity = float(3.0); // baked into the shader
 
     // Static values
     const holeRadius = float(0.054);
     const ringRadii = vec3(inner, middle, outer);
     const ringW = float(ringWidth);
     const activeColor = new THREE.Color('#ffd900');
+    const inactiveColor = new THREE.Color('#ffffff');
     const activeColorRGB = vec3(...activeColor.toArray());
     const activeColorA = float(0.01);
-    const inactiveColorRGB = vec3(1.0, 1.0, 1.0);
-    const inactiveColorA = float(0.2);
+    const inactiveColorRGB = vec3(...inactiveColor.toArray());
+    const inactiveColorA = float(0.8);
 
     if (object instanceof THREE.Mesh) {
       const origMat = object.material as THREE.MeshStandardMaterial;
 
-      const mat = new MeshStandardNodeMaterial({
-        // alphaToCoverage: true,
-      });
+      // const mat = new MeshStandardNodeMaterial({
+      //   // alphaToCoverage: true,
+      // });
 
-      // Copy properties from the original GLTF material
-      if (origMat.color) mat.color = origMat.color.clone();
-      if (origMat.map) mat.map = origMat.map;
-      if (origMat.normalMap) mat.normalMap = origMat.normalMap;
-      mat.roughness = origMat.roughness ?? 1.0;
-      mat.metalness = origMat.metalness ?? 0.0;
-      if (origMat.roughnessMap) mat.roughnessMap = origMat.roughnessMap;
-      if (origMat.metalnessMap) mat.metalnessMap = origMat.metalnessMap;
-      // if (origMat.emissive) mat.emissive = origMat.emissive.clone();
-      // if (origMat.emissiveMap) mat.emissiveMap = origMat.emissiveMap;
-      // mat.emissiveIntensity = origMat.emissiveIntensity ?? 1.0;
-      if (origMat.aoMap) mat.aoMap = origMat.aoMap;
-      mat.aoMapIntensity = origMat.aoMapIntensity ?? 1.0;
-      mat.envMapIntensity = origMat.envMapIntensity ?? 1.0;
-      if (origMat.lightMap) mat.lightMap = origMat.lightMap;
-      mat.lightMapIntensity = origMat.lightMapIntensity ?? 1.0;
-      mat.side = origMat.side;
-      mat.toneMapped = origMat.toneMapped;
-      if (origMat.normalScale) mat.normalScale = origMat.normalScale.clone();
+      // // Copy properties from the original GLTF material
+      // if (origMat.color) mat.color = origMat.color.clone();
+      // if (origMat.map) mat.map = origMat.map;
+      // if (origMat.normalMap) mat.normalMap = origMat.normalMap;
+      // mat.roughness = origMat.roughness ?? 1.0;
+      // mat.metalness = origMat.metalness ?? 0.0;
+      // if (origMat.roughnessMap) mat.roughnessMap = origMat.roughnessMap;
+      // if (origMat.metalnessMap) mat.metalnessMap = origMat.metalnessMap;
+      // // if (origMat.emissive) mat.emissive = origMat.emissive.clone();
+      // // if (origMat.emissiveMap) mat.emissiveMap = origMat.emissiveMap;
+      // // mat.emissiveIntensity = origMat.emissiveIntensity ?? 1.0;
+      // if (origMat.aoMap) mat.aoMap = origMat.aoMap;
+      // mat.aoMapIntensity = origMat.aoMapIntensity ?? 1.0;
+      // mat.envMapIntensity = origMat.envMapIntensity ?? 1.0;
+      // if (origMat.lightMap) mat.lightMap = origMat.lightMap;
+      // mat.lightMapIntensity = origMat.lightMapIntensity ?? 1.0;
+      // mat.side = origMat.side;
+      // mat.toneMapped = origMat.toneMapped;
+      // if (origMat.normalScale) mat.normalScale = origMat.normalScale.clone();
 
+      // Turf base: fade/discolor/terrain shading from the shared green preset
+      const mat = new GrassSurface(origMat, options.surfaceOptions ?? {});
       // --- Distance from fragment to hole (XZ plane) ---
       const dist: any = positionWorld.xz.sub(this.holePosUniform.xz).length();
 
@@ -122,12 +130,19 @@ export class TargetShaderMaterial {
 
       // --- Composite rings onto the base color ---
       // Start with the material's base color (includes .color * .map)
-      let color: any = materialColor;
-
-      // White outlines — always visible
-      color = mix(color, inactiveColorRGB, outline1.mul(inactiveColorA));
-      color = mix(color, inactiveColorRGB, outline2.mul(inactiveColorA));
-      color = mix(color, inactiveColorRGB, outline3.mul(inactiveColorA));
+      // let color: any = materialColor;
+      // Start from the turf shader's output instead of the raw material color
+      let color: any = mat.colorNode;
+      
+      // // White outlines — always visible
+      // color = mix(color, inactiveColorRGB, outline1.mul(inactiveColorA));
+      // color = mix(color, inactiveColorRGB, outline2.mul(inactiveColorA));
+      // color = mix(color, inactiveColorRGB, outline3.mul(inactiveColorA));
+      // White outlines — only on the active hole
+      const vis = this.visibleUniform;
+      color = mix(color, inactiveColorRGB, outline1.mul(inactiveColorA).mul(vis));
+      color = mix(color, inactiveColorRGB, outline2.mul(inactiveColorA).mul(vis));
+      color = mix(color, inactiveColorRGB, outline3.mul(inactiveColorA).mul(vis));
 
       // Yellow fill — fades in/out with ringActive
       const active = this.ringActiveUniform;
@@ -153,7 +168,7 @@ export class TargetShaderMaterial {
         .add(outlineGlow)            // bright ring edge
         .clamp(0.0, 1.0);
 
-      mat.emissiveNode = activeColorRGB.mul(glowMask).mul(glowIntensity);
+      mat.emissiveNode = activeColorRGB.mul(glowMask.mul(glowIntensity).mul(vis));
       
       // Discard must live inside an Fn() that is wired into the
       // material, otherwise the statement never enters the node graph.
@@ -204,5 +219,13 @@ export class TargetShaderMaterial {
     const t = 1.0 - Math.exp(-this.lerpSpeed * dt);
     this.currentActive.lerp(target, t);
     this.ringActiveUniform.value.copy(this.currentActive);
+  }
+
+  setVisible(visible: boolean) {
+    this.visibleUniform.value = visible ? 1.0 : 0.0;
+    if (!visible) {
+      this.currentActive.set(0, 0, 0);
+      this.ringActiveUniform.value.set(0, 0, 0);
+    }
   }
 }

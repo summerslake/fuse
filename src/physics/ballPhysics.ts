@@ -6,8 +6,18 @@ import { UnitConversions } from '@/utils/units';
 import { CourseSurfaceProperties, CourseSurfaces, isCourseSurfaceType, CourseSurfaceType, CourseColliderType } from '@/courses/surfaces';
 import { PhysicsLookupTable, GRAVITY } from './constants';
 
+// A real Stimpmeter releases the ball at 1.83 m/s; the stimp rating is
+// how many FEET it rolls. Constant-braking physics gives:
+//   decel = speed² / (2 × distance)  →  5.49 / stimp  (in m/s²)
+const STIMP_RELEASE_SPEED = 1.83 // m/s
+// Braking scales smoothly with speed — no cutoff. At exactly the
+          // release speed, braking matches the stimp rating, so putts stay correct.
+          // Tuning knob: bigger = long shots brake harder, smaller = chips run out more.
+const SPEED_BRAKING_SCALE = 0.3;
+
 export type ShotEndEvent = {
   surface?: CourseColliderType,
+  holeNumber?: number,
   isInWater?: boolean,
   isHoled?: boolean
 }
@@ -23,7 +33,8 @@ type TerrainInfo = {
   restitution: number,
   friction: number,
   normal: THREE.Vector3,
-  surface?: CourseSurfaceProperties
+  surface?: CourseSurfaceProperties,
+  holeNumber?: number,
 }
 
 // Membership in low 16 bits, filter in high 16 bits
@@ -56,6 +67,7 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
   hasBeenAirborne = false;
   terrainCollisionsEnabled = false;
   currentSurface?: CourseSurfaceProperties;
+  currentHoleNumber?: number;
 
   // Thresholds
   defaultEndThresholdSpeed = 0.15;   // m/s linear
@@ -84,7 +96,11 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
   #mergedBVH!: MeshBVH;
   #mergedMesh!: THREE.Mesh;
   #surfaceKeys: string[] = [];
-
+  #surfaceHoleNumbers: (number | undefined)[] = [];
+  #dynamicSurfaces: { mesh: THREE.Mesh; bvh: MeshBVH; surfaceKey: string }[] = [];
+  #invMat = new THREE.Matrix4();
+  #normalMat = new THREE.Matrix3();
+  #localRay = new THREE.Ray();
   #terrainRay = new THREE.Ray();
   #surfaceSpin = new THREE.Vector3();
 
@@ -109,6 +125,7 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
     this.mesh = mesh;
 
     if (stimpLevel) {
+      console.log(`Using STIMP level of ${stimpLevel}`);
       this.stimpLevel = stimpLevel;
     }
     
@@ -154,7 +171,8 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
         geo.applyMatrix4(tm.matrixWorld);
         
         const surfaceIndex = this.#surfaceKeys.length;
-        this.#surfaceKeys.push(tm.userData.surface ?? 'base');        
+        this.#surfaceKeys.push(tm.userData.surface ?? 'base');
+        this.#surfaceHoleNumbers.push(tm.userData.holeNumber);
 
         // Store surface index per face via groups
         geo.clearGroups();
@@ -435,6 +453,7 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
     this.isShotActive = false;
     this.emit('shotEnded', {
       surface: this.currentSurface?.type,
+      holeNumber: this.currentHoleNumber,
       isInWater: this.isInWater,
       isHoled: this.isHoled
     });
@@ -547,6 +566,7 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
     }
     
     this.currentSurface = terrain?.surface;
+    this.currentHoleNumber = terrain?.holeNumber;
 
     const minY = terrainY + (this.ballRadius * 2);
 
@@ -613,7 +633,14 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
             vel.addScaledVector(slip, -impulse);
 
             // Spin converges toward rolling by the fraction of grip achieved
-            const f = impulse / gripImpulse;
+            // const f = impulse / gripImpulse;
+            // Capped: a single impact can't fully convert backspin to rolling —
+            // residual backspin drives the skid phase after roll transition
+            // const f = Math.min(impulse / gripImpulse, 0.6);
+            // Low-spin shots keep some backspin to skid against after landing;
+            // high-spin shots (bite → 1) convert spin exactly as before.
+            const f = Math.min(impulse / gripImpulse, THREE.MathUtils.lerp(0.6, 1.0, bite));            
+
             const vtAfter = new THREE.Vector3().copy(vel).addScaledVector(normal, -vel.dot(normal));
             const rollSpin = new THREE.Vector3().crossVectors(normal, vtAfter).divideScalar(this.ballRadius);
             spin.lerp(rollSpin, f);
@@ -639,9 +666,18 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
         // Stimp-driven roll on the green: Stimpmeter releases at 1.83 m/s,
         // rating = rollout in feet, so constant decel a = 5.49 / stimp
         const useStimpLevel = this.currentSurface?.type === CourseSurfaceType.Green;
-        const decel = useStimpLevel
-          ? 5.49 / this.stimpLevel
-          : resistance * GRAVITY;
+        // const decel = useStimpLevel
+        //   ? 5.49 / this.stimpLevel
+        //   : resistance * GRAVITY;
+        let decel;
+        if (useStimpLevel) {
+          const stimpDecel = (STIMP_RELEASE_SPEED * STIMP_RELEASE_SPEED) / (2 * UnitConversions.feetToMeters(this.stimpLevel));
+          decel = stimpDecel *
+            (1 + SPEED_BRAKING_SCALE * (horizontalSpeed - STIMP_RELEASE_SPEED));
+        } else {
+          decel = resistance * GRAVITY;
+        }
+
         const friction = Math.min(decel * normalForce * dt, horizontalSpeed);
 
 
@@ -711,28 +747,69 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
     this.#terrainRay.origin.set(x, 1000, z);
     this.#terrainRay.direction.set(0, -1, 0);
 
-    const hit = this.#mergedBVH.raycastFirst(this.#terrainRay, THREE.DoubleSide);
-    if (!hit) {
-      console.warn('[terrain] raycast MISS at', x.toFixed(1), z.toFixed(1));
-      return this.#lastTerrainInfo;
-    }
+    // const hit = this.#mergedBVH.raycastFirst(this.#terrainRay, THREE.DoubleSide);
+    // if (!hit) {
+    let hit = this.#mergedBVH.raycastFirst(this.#terrainRay, THREE.DoubleSide);
 
     let surfaceKey = 'base';
-    if (hit.faceIndex != null && this.#mergedMesh.geometry.groups.length > 0) {
+    let holeNumber: number | undefined;
+    if (hit && hit.faceIndex != null && this.#mergedMesh.geometry.groups.length > 0) {
       const vertIndex = hit.faceIndex * 3;
       for (const group of this.#mergedMesh.geometry.groups) {
         if (vertIndex >= group.start && vertIndex < group.start + group.count) {
           surfaceKey = this.#surfaceKeys[group.materialIndex ?? 0];
+          holeNumber = this.#surfaceHoleNumbers[group.materialIndex ?? 0];
           break;
         }
       }
     }
+    let hitNormalWorld = hit?.face?.normal ?? null;
+
+    // Dynamic surfaces: raycast in local space via current matrixWorld
+    for (const d of this.#dynamicSurfaces) {
+      d.mesh.updateMatrixWorld();
+      this.#invMat.copy(d.mesh.matrixWorld).invert();
+      this.#localRay.copy(this.#terrainRay).applyMatrix4(this.#invMat);
+      const dHit = d.bvh.raycastFirst(this.#localRay, THREE.DoubleSide);
+      if (!dHit) continue;
+      dHit.point.applyMatrix4(d.mesh.matrixWorld);
+      // Downward ray: higher y = topmost surface = what the ball rests on
+      if (!hit || dHit.point.y > hit.point.y) {
+        hit = dHit;
+        surfaceKey = d.surfaceKey;
+        holeNumber = d.mesh.userData.holeNumber;
+        hitNormalWorld = dHit.face
+          ? dHit.face.normal.applyNormalMatrix(
+              this.#normalMat.getNormalMatrix(d.mesh.matrixWorld)
+            ).normalize()
+          : null;
+      }
+    }
+
+    if (!hit) {
+
+      console.warn('[terrain] raycast MISS at', x.toFixed(1), z.toFixed(1));
+      return this.#lastTerrainInfo;
+    }
+
+    // let surfaceKey = 'base';
+    // if (hit.faceIndex != null && this.#mergedMesh.geometry.groups.length > 0) {
+    //   const vertIndex = hit.faceIndex * 3;
+    //   for (const group of this.#mergedMesh.geometry.groups) {
+    //     if (vertIndex >= group.start && vertIndex < group.start + group.count) {
+    //       surfaceKey = this.#surfaceKeys[group.materialIndex ?? 0];
+    //       break;
+    //     }
+    //   }
+    // }
 
     const validSurfaceKey = isCourseSurfaceType(surfaceKey) ? surfaceKey : CourseSurfaceType.Base;
     const surfaceSettings = CourseSurfaces[validSurfaceKey];
 
-    const normal = hit.face
-      ? this.#hitNormal.copy(hit.face.normal)
+    // const normal = hit.face
+    //   ? this.#hitNormal.copy(hit.face.normal)
+    const normal = hitNormalWorld
+      ? this.#hitNormal.copy(hitNormalWorld)
       : this.#hitNormal.set(0, 1, 0);
 
     this.#lastTerrainInfo = {
@@ -740,6 +817,7 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
       restitution: surfaceSettings.restitution ?? 0.35,
       friction: surfaceSettings.friction ?? 0.6,
       surface: { type: validSurfaceKey, ...surfaceSettings },
+      holeNumber,
       normal
     };
     return this.#lastTerrainInfo;
@@ -924,4 +1002,14 @@ export class BallPhysics extends EventEmitter<BallPhysicsEvents> {
     this.isGrounded = false; // stop the rest-check from ending the shot mid-drop
   }
 
+  /** Register a movable mesh (e.g. practice green) as a physics surface.
+   *  BVH is built once in local space; current matrixWorld is applied per
+   *  query, so the mesh can be repositioned/scaled at runtime freely. */
+  addDynamicSurface(mesh: THREE.Mesh, surfaceKey?: string) {
+    this.#dynamicSurfaces.push({
+      mesh,
+      bvh: new MeshBVH(mesh.geometry),
+      surfaceKey: surfaceKey ?? mesh.userData.surface ?? 'base',
+    });
+  }
 }
