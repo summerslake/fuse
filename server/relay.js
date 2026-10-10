@@ -6,7 +6,7 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** One line per room event, so a host can see who's actually in a room. */
 function logRoom(room, message) {
@@ -77,6 +77,13 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         // live swing announcement — same ownership rule as a shot result
         if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
         room.broadcast({ type: 'launch', playerId: msg.playerId, launch: msg.launch });
+        break;
+      }
+      case 'aim_update': {
+        // where the player lining up is aiming — visual only, so it isn't
+        // logged, and the sender already has it
+        if (!room.ownsPlayer(conn.clientId, msg.playerId)) return;
+        room.broadcast({ type: 'aim', playerId: msg.playerId, aim: msg.aim }, conn.clientId);
         break;
       }
       case 'hazard_action': {

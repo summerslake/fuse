@@ -7,11 +7,13 @@ import {
   type RosterMessage,
   type ShotMessage,
   type LaunchMessage,
+  type AimMessage,
   type HazardMessage,
   type HazardAction,
   type StartedMessage,
   type NetShotResult,
   type NetShotLaunch,
+  type NetAim,
 } from './types';
 
 export interface NetClientJoinParams {
@@ -63,6 +65,8 @@ interface NetClientEvents {
   shot: (msg: ShotMessage) => void;
   /** a player just swung — fly the same shot live (re-simulate) */
   launch: (msg: LaunchMessage) => void;
+  /** another player moved their aim or their ball while lining up */
+  aim: (msg: AimMessage) => void;
   /** a player resolved a ball in the water — apply it on every client */
   hazard: (msg: HazardMessage) => void;
   /** the lobby closed — the roster is final, build the game from it */
@@ -166,6 +170,9 @@ export class NetClient extends EventEmitter<NetClientEvents> {
       case 'launch':
         this.emit('launch', msg);
         break;
+      case 'aim':
+        this.emit('aim', msg);
+        break;
       case 'hazard':
         // counted alongside shots — it is in the same replay log
         this.shotsSeen++;
@@ -208,6 +215,11 @@ export class NetClient extends EventEmitter<NetClientEvents> {
   /** Announce a swing so other clients can fly it live (before it lands). */
   sendShotLaunch(playerId: string, launch: NetShotLaunch) {
     this.#send({ type: 'shot_launch', playerId, launch });
+  }
+
+  /** Share where we're aiming while lining up. Visual only; safe to lose. */
+  sendAim(playerId: string, aim: NetAim) {
+    this.#send({ type: 'aim_update', playerId, aim });
   }
 
   /** Report how a ball in the water was played. Everyone recomputes the rest. */

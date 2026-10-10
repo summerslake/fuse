@@ -129,10 +129,12 @@ export class Room {
     };
   }
 
-  broadcast(msg) {
+  /** Send to everyone in the room, optionally skipping one client (the sender). */
+  broadcast(msg, exceptClientId) {
     if (msg.type === 'shot' || msg.type === 'hazard') this.shotLog.push(msg);
     const raw = JSON.stringify(msg);
-    for (const { socket, alive } of this.clients.values()) {
+    for (const [clientId, { socket, alive }] of this.clients) {
+      if (clientId === exceptClientId) continue;
       if (alive && socket.readyState === 1 /* OPEN */) socket.send(raw);
     }
   }

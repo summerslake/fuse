@@ -6,7 +6,7 @@
  */
 import { type HazardAction } from '@/courses/game';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export { type HazardAction };
 
@@ -44,6 +44,23 @@ export interface NetShotResult {
   isInWater?: boolean;
   /** hole whose surface the ball rests on (a green only auto-putts on the hole in play) */
   holeNumber?: number;
+  /**
+   * Where the shot was played from [x, y, z]. A player can move their ball on
+   * the map before hitting; rehit, mulligan and the drop search all work from
+   * this point, so every client has to score from the same one.
+   */
+  startPosition?: [number, number, number];
+}
+
+/**
+ * Where a player is aiming (and where their ball sits) while they line up a
+ * shot, so everyone else's view follows along. Purely visual and lossy by
+ * design: the aim that counts travels with NetShotLaunch, the start that counts
+ * with NetShotResult.
+ */
+export interface NetAim {
+  aim: [number, number, number];
+  start: [number, number, number];
 }
 
 /**
@@ -93,6 +110,12 @@ export interface ShotLaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
+/** The player lining up a shot moved their aim or their ball. Not logged. */
+export interface AimUpdateMessage {
+  type: 'aim_update';
+  playerId: string;
+  aim: NetAim;
+}
 /**
  * How the shooter chose to play a ball that finished in water. Only the choice
  * travels — where the drop lands is recomputed identically on every client (see
@@ -114,6 +137,7 @@ export type ClientMessage =
   | JoinMessage
   | ShotResultMessage
   | ShotLaunchMessage
+  | AimUpdateMessage
   | HazardActionMessage
   | StartMessage
   | LeaveMessage;
@@ -142,6 +166,12 @@ export interface LaunchMessage {
   playerId: string;
   launch: NetShotLaunch;
 }
+/** Another player's aim moved. Sent to everyone except the player aiming. */
+export interface AimMessage {
+  type: 'aim';
+  playerId: string;
+  aim: NetAim;
+}
 /** A hazard resolution, echoed to everyone. Ordered in the log alongside shots. */
 export interface HazardMessage {
   type: 'hazard';
@@ -162,6 +192,7 @@ export type ServerMessage =
   | RosterMessage
   | ShotMessage
   | LaunchMessage
+  | AimMessage
   | HazardMessage
   | StartedMessage
   | ErrorMessage;

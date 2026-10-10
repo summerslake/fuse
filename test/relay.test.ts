@@ -102,6 +102,29 @@ describe('relay ↔ NetClient', () => {
     expect(l2.launch).toEqual(launch);
   });
 
+  it('forwards a player\'s aim to everyone else, and keeps it out of the replay log', async () => {
+    const port = await startRelay();
+    const { c1, c2, id1, id2 } = await joinTwo(port);
+    const aim = { aim: [5, 0, 120], start: [0, 0, 0] } as any;
+
+    let echoedToSender = false;
+    c1.on('aim', () => { echoedToSender = true; });
+    const onC2 = once(c2, 'aim');
+    c1.sendAim(id1, aim);
+    expect(await onC2).toMatchObject({ playerId: id1, aim });
+
+    // not for a player the sender doesn't own
+    let forged = false;
+    c2.on('aim', () => { forged = true; });
+    c1.sendAim(id2, aim);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(forged).toBe(false);
+    expect(echoedToSender).toBe(false);
+    // display only: a rejoining client replays shots, never stale aim
+    expect(c1.shotsSeen).toBe(0);
+    expect(c2.shotsSeen).toBe(0);
+  });
+
   it('drops a shot_launch for a player the sender does not own', async () => {
     const port = await startRelay();
     const { c1, c2, id2 } = await joinTwo(port);

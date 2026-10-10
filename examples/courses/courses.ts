@@ -30,6 +30,7 @@ import {
   type UILobbyCourse,
   type GameEventMessage,
   type HazardAction,
+  type NetAim,
   UILaunchMonitor,
   UIHoleScoreToast
  } from '@opengolfsim/fuse';
@@ -110,6 +111,8 @@ const gameContext: {
   dialogs: {}
 };
 
+const NO_AIM_KEYS = { left: false, right: false, forward: false, backward: false };
+
 const defaultSkyColor = 'rgb(177, 205, 236)';
 const defaultFogColor = 'rgb(255, 247, 224)';
 const defaultCloudColor = 'rgb(255, 255, 255)';
@@ -170,6 +173,7 @@ function flyRemoteShot(playerId: string, launch: { shot: OpenGolfSim.Shot, start
   // Mark this as a replay so GameSync never reports its landing as our own shot
   // (the authoritative result comes from the shooter). Must be set before launch.
   gameContext.replayingRemoteShot = true;
+  remoteAimTarget = null; // the swing carries the exact aim; stop gliding
 
   gameContext.startPoint.copy(start);
   gameContext.aimPoint.copy(aim);
@@ -217,6 +221,8 @@ function setupNextShot() {
   // recreate ball after each shot to ensure physics are fully reset
   gameContext.golfBall?.reset(gameContext.aimPoint, gameContext.startPoint, gameContext.game.activeHole.waypoints.get('pin'));
 
+  lastAimShared = ''; // a new shot: whoever is up announces where they stand
+  remoteAimTarget = null; // ...and nobody is still gliding toward the last one
   aimPointUpdated(true);
 
   gameContext.clouds?.update();
@@ -374,6 +380,94 @@ function aimPointUpdated(forced = false) {
   if (forced) {
     gameContext.visualAimPoint?.reset(gameContext.aimPoint);
   }
+  shareAim();
+}
+
+/** True in multiplayer while someone else's player is lining up their shot. */
+function isSpectating(): boolean {
+  return !!gameContext.net && !!gameContext.game && !gameContext.game.isLocalTurn;
+}
+
+const AIM_SHARE_INTERVAL = 50; // ms — holding an aim key changes it every frame
+let lastAimShared = '';
+let lastAimSharedAt = 0;
+let aimShareTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Multiplayer: tell the other players where we're aiming (and where our ball
+ * is) while it's our turn, so their view lines up with ours. Throttled, with a
+ * trailing send so the last position always arrives.
+ */
+function shareAim() {
+  if (!gameContext.net || !gameContext.game?.isLocalTurn) return;
+  const wait = AIM_SHARE_INTERVAL - (performance.now() - lastAimSharedAt);
+  if (wait > 0) {
+    aimShareTimer ??= setTimeout(sendAimNow, wait);
+  } else {
+    sendAimNow();
+  }
+}
+
+function sendAimNow() {
+  clearTimeout(aimShareTimer);
+  aimShareTimer = undefined;
+  const { net, game, golfBall } = gameContext;
+  // re-checked: the turn may have passed, or the ball left, while we waited
+  if (!net || !game?.isLocalTurn || golfBall?.isShotActive) return;
+  const aim: NetAim = {
+    aim: gameContext.aimPoint.toArray() as [number, number, number],
+    start: gameContext.startPoint.toArray() as [number, number, number],
+  };
+  const key = JSON.stringify(aim);
+  if (key === lastAimShared) return;
+  lastAimShared = key;
+  lastAimSharedAt = performance.now();
+  net.sendAim(game.activePlayer.id, aim);
+}
+
+/**
+ * Another player moved their aim or their ball — follow along. Display only:
+ * the aim that counts arrives with their swing, the start with their result.
+ */
+function applyRemoteAim(playerId: string, { aim, start }: NetAim) {
+  const game = gameContext.game;
+  if (!game || !gameContext.golfBall) return;
+  if (game.localPlayerIds.has(playerId)) return;        // ours
+  if (playerId !== game.activePlayer.id) return;        // late: the turn has moved on
+  if (gameContext.golfBall.isShotActive) return;        // their shot is already in the air
+
+  const startPoint = new THREE.Vector3().fromArray(start);
+  if (startPoint.distanceToSquared(gameContext.startPoint) > 1e-6) {
+    // They placed their ball somewhere else. That's a cut, not a pan: jump.
+    remoteAimTarget = null;
+    gameContext.aimPoint.fromArray(aim);
+    game.updateStartPoint(startPoint);
+    gameContext.startPoint.copy(startPoint);
+    gameContext.golfBall.reset(gameContext.aimPoint, startPoint, game.activeHole.waypoints.get('pin'));
+    gameContext.courseMap?.updatePosition(startPoint, game.pinPoint());
+    gameContext.camera?.setPositions(gameContext.startPoint, gameContext.aimPoint);
+    aimPointUpdated(true);
+    return;
+  }
+  // Same ball, new aim: glide there over the next few frames (see easeRemoteAim)
+  // rather than stepping once per message.
+  remoteAimTarget = (remoteAimTarget ?? new THREE.Vector3()).fromArray(aim);
+}
+
+/** Where the player we're watching is aiming now; our view is still catching up. */
+let remoteAimTarget: THREE.Vector3 | null = null;
+const REMOTE_AIM_EASE = 12; // per second — higher follows tighter, lower floats more
+
+/** Each frame, move our view a little closer to the watched player's aim. */
+function easeRemoteAim(delta: number) {
+  if (!remoteAimTarget) return;
+  gameContext.aimPoint.lerp(remoteAimTarget, 1 - Math.exp(-delta * REMOTE_AIM_EASE));
+  if (gameContext.aimPoint.distanceToSquared(remoteAimTarget) < 1e-4) {
+    gameContext.aimPoint.copy(remoteAimTarget);
+    remoteAimTarget = null;
+  }
+  gameContext.camera?.setPositions(gameContext.startPoint, gameContext.aimPoint);
+  aimPointUpdated();
 }
 
 
@@ -588,6 +682,9 @@ async function setupCourse() {
       flyRemoteShot(playerId, launch);
     });
 
+    // Live aim — follow the player who's lining up.
+    gameContext.net.on('aim', ({ playerId, aim }) => applyRemoteAim(playerId, aim));
+
     // Catch up on anything that happened while we were loading (or before we
     // resumed). Scoring and turn order are deterministic, so replaying these in
     // order lands us exactly where everyone else already is.
@@ -693,8 +790,14 @@ async function setupCourse() {
 
   setupNextShot();
 
-  gameContext.courseMap?.on('updateAim', adjustAimPoint);
-  gameContext.courseMap?.on('updateStart', adjustStartPoint);
+  // Not on someone else's turn: the view is following their aim, and moving
+  // "the" ball would move theirs — in our game only.
+  gameContext.courseMap?.on('updateAim', (position) => {
+    if (!isSpectating()) adjustAimPoint(position);
+  });
+  gameContext.courseMap?.on('updateStart', (position) => {
+    if (!isSpectating()) adjustStartPoint(position);
+  });
 
   if (gameContext.camera) {
     console.log('Precompiling shaders...');
@@ -821,6 +924,11 @@ function animate(animDelta: number) {
       if (gameContext.golfBall.isShotActive && gameContext.golfBall.object) {
         gameContext.camera?.track(delta, gameContext.startPoint, gameContext.golfBall.object.position);
       } else {
+        // someone else is lining up: our aim keys don't steer their shot
+        if (gameContext.camera && isSpectating()) {
+          gameContext.camera.aimKeys = NO_AIM_KEYS;
+          easeRemoteAim(delta);
+        }
         const aimChanged = gameContext.camera?.update(delta, gameContext.startPoint, gameContext.aimPoint);
         if (aimChanged) {
           aimPointUpdated();

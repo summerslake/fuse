@@ -306,7 +306,11 @@ describe('GameSync — isReplay guard', () => {
 
     // It IS our turn (the race: the turn has flipped to us by the time the
     // replayed ball lands). Only the replay flag should suppress the send.
-    const game: any = { isLocalTurn: true, activePlayer: { id: 'me' }, applyShotResult() {} };
+    const game: any = {
+      isLocalTurn: true,
+      activePlayer: { id: 'me', start: new THREE.Vector3() },
+      applyShotResult() {},
+    };
     let replaying = true;
     new GameSync(game, fakeNet, ball, { isReplay: () => replaying });
 

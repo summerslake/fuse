@@ -57,7 +57,7 @@ the current state rather than approximately near it.
 
 ---
 
-## Wire protocol (v5)
+## Wire protocol (v6)
 
 JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 
@@ -65,7 +65,8 @@ JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 |---|---|
 | `join` | claim these players; carries `clientKey` (stable across reconnects) and `sinceShot` |
 | `shot_launch` | I just swung — fly this live |
-| `shot_result` | my ball came to rest here |
+| `aim_update` | I moved my aim or my ball while lining up (display only, not logged) |
+| `shot_result` | my ball came to rest here — and this is where I hit it from |
 | `hazard_action` | how I'm playing my ball out of the water (`drop`/`rehit`/`mulligan`) |
 | `start` | close the lobby, start the round |
 | `leave` | graceful exit |
@@ -75,6 +76,7 @@ JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 | `joined` | ack + room snapshot (roster, course, whether it's started) |
 | `roster` | someone joined or left |
 | `launch` | re-simulate this shot now |
+| `aim` | follow this player's aim (sent to everyone but the player aiming) |
 | `shot` | score this (sent to everyone, including the sender) |
 | `hazard` | apply this hazard resolution (likewise everyone, sender included) |
 | `started` | lobby closed, build the game from this roster |
@@ -88,6 +90,14 @@ to: a drop replayed out of sequence puts the ball somewhere nobody else has it.
 Note what a `hazard` message does *not* carry — where the drop landed. Only the
 choice travels, and every client recomputes the lie by raycasting a course it
 has already loaded, the same way turn order is derived rather than sent.
+
+`aim` is the one deliberately lossy message: throttled to ten a second, never
+logged, never replayed. Nothing depends on it. The aim that decides a shot
+travels with `shot_launch`, and the position it was played from travels with
+`shot_result` (`startPosition`) — a player can move their ball on the map, and
+rehit, mulligan and the drop search all start from that point, so it has to
+arrive on the reliable path. While another player is lining up, local aim keys
+and map clicks are ignored: the view is following theirs.
 
 ---
 

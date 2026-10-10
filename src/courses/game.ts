@@ -86,6 +86,12 @@ export type ShotResultInput = {
   isInWater?: boolean,
   /** which hole's surface the ball rests on — a green only counts on the hole in play */
   holeNumber?: number,
+  /**
+   * Where the shot was played from, when the caller knows better than we do —
+   * a networked shooter may have moved their ball before hitting, and this
+   * client only heard about that on a best-effort channel.
+   */
+  startPosition?: THREE.Vector3,
 }
 
 /** What applyShotResult reports back to the caller. */
@@ -344,6 +350,12 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
 
     if (!this.practiceMode) {
       this._addStrokes(player);
+    }
+
+    // The shooter's own start wins over ours: they may have moved their ball
+    // before hitting, and everything a hazard resolution does starts from here.
+    if (result.startPosition) {
+      player.start.copy(result.startPosition);
     }
 
     // store for mulligans

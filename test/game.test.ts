@@ -217,6 +217,13 @@ describe('CourseGame — water hazards', () => {
     expect(g.awaitingHazardFor).toBe(null);
   });
 
+  it('plays a hazard out from where the shooter says they hit from', () => {
+    // p1 moved their ball before hitting; this client never saw the move
+    play(g, { ...water(60), startPosition: V(10, 0, 20) });
+    g.applyHazardAction('p1', 'rehit');
+    expect(player(g, 'p1').start.toArray()).toEqual([10, 0, 20]);
+  });
+
   it('rehit replays from the previous spot, stroke still counted', () => {
     play(g, fairway(60));                             // p1 to 90 out
     play(g, fairway(10));                             // p2 to 140 out -> p2 away

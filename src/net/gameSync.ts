@@ -68,6 +68,8 @@ export class GameSync extends EventEmitter<GameSyncEvents> {
         isHoled: details.isHoled === true,
         isInWater: details.isInWater === true,
         holeNumber: details.holeNumber,
+        // still the pre-shot position: nothing is applied until the echo
+        startPosition: game.activePlayer.start.toArray() as [number, number, number],
       });
     });
 
@@ -94,6 +96,9 @@ export class GameSync extends EventEmitter<GameSyncEvents> {
       isHoled: result.isHoled,
       isInWater: result.isInWater,
       holeNumber: result.holeNumber,
+      startPosition: result.startPosition
+        ? new THREE.Vector3().fromArray(result.startPosition)
+        : undefined,
     });
     if (outcome.awaitingHazard) {
       // Nobody's turn advanced. Whoever owns this player has to answer, and
