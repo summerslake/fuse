@@ -63,12 +63,13 @@ const MULTIPLAYER_TILE = {
  * Meshery export, typically. List them in `courses.local.json` at the repo root
  * (gitignored; see courses.local.example.json):
  *
- *   [{ "title": "My Course", "file": "/absolute/path/to/course.glb" }]
+ *   [{ "title": "My Course", "file": "/absolute/path/to/course.glb", "poster": "/optional/tile.jpg" }]
  *
- * Each one is served at `/local-courses/<slug>.glb` and added to the lobby's
- * course picker. The address is deliberately host-relative: a guest loads the
- * page from this server, so the same path reaches the same file from their
- * machine, and every client in a room names the course identically.
+ * Each one is served at `/local-courses/<slug>.glb` and shows up in two places:
+ * the multiplayer lobby's course picker, and OGS Desktop's library as a tile of
+ * its own (solo, launch monitor and all — the quick way to check an export).
+ * The file is read on every request, so re-exporting to the same path only
+ * needs a reload.
  */
 const LOCAL_COURSES_FILE = path.resolve(import.meta.dirname, 'courses.local.json');
 const LOCAL_COURSES_PATH = '/local-courses/';
@@ -90,24 +91,38 @@ function readLocalCourses() {
       continue;
     }
     const slug = String(entry.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    courses.push({ title: entry.title, file: entry.file, slug });
+    const poster = entry.poster && fs.existsSync(entry.poster) ? entry.poster : undefined;
+    courses.push({ title: entry.title, file: entry.file, slug, poster });
   }
   return courses;
 }
 
-/** A local course as the lobby's picker (and Desktop's catalog format) expects it. */
-function localCourseEntry(course) {
+/**
+ * A local course in the catalog's own format, which both the lobby's picker and
+ * Desktop's library read.
+ *
+ * `origin` decides how the course file is addressed. The lobby gets a host-
+ * relative path ('' origin): a guest loads the page from this server, so the
+ * same path reaches the same file from their machine, and every client in a
+ * room names the course identically. Desktop gets a full address, like every
+ * other entry in its catalog — it hands that to the game as-is.
+ */
+function localCourseEntry(course, origin = '') {
+  const base = `${origin}${LOCAL_COURSES_PATH}${course.slug}`;
   return {
     title: course.title,
     description: 'Local course served by this host',
     url: '/fuse/examples/courses/index.html',
     gameMode: 2,
     engine: 2,
-    courseUrl: `${LOCAL_COURSES_PATH}${course.slug}.glb`,
+    courseUrl: `${base}.glb`,
+    posterUrl: course.poster ? `${base}.poster` : MULTIPLAYER_TILE.posterUrl,
     slug: `local_${course.slug.replace(/-/g, '_')}`,
     gameEngine: 'webgl',
   };
 }
+
+const POSTER_TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 
 /**
  * Serve a local course file. HEAD and byte ranges matter: the course loader
@@ -115,10 +130,19 @@ function localCourseEntry(course) {
  * GLB shows progress and survives a slow link.
  */
 function serveLocalCourse(req, res) {
-  const slug = decodeURIComponent(req.url.split('?')[0].slice(LOCAL_COURSES_PATH.length)).replace(/\.glb$/, '');
+  const name = decodeURIComponent(req.url.split('?')[0].slice(LOCAL_COURSES_PATH.length));
+  const slug = name.replace(/\.(glb|poster)$/, '');
   const course = readLocalCourses().find((c) => c.slug === slug);
   if (!course) {
     res.writeHead(404).end('No such local course');
+    return;
+  }
+  if (name.endsWith('.poster')) {
+    if (!course.poster) return void res.writeHead(404).end('No poster for this course');
+    const type = POSTER_TYPES[path.extname(course.poster).toLowerCase()] || 'application/octet-stream';
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' });
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(course.poster).pipe(res);
     return;
   }
   const { size } = fs.statSync(course.file);
@@ -162,12 +186,11 @@ async function serveLibraryWithMultiplayer(req, res) {
     );
   }
   body.courses = [MULTIPLAYER_TILE, ...(body.courses ?? [])];
-  // The lobby builds its course picker from /courses/home. Desktop's own
-  // library is left alone: it would list these as installable tiles, and what
-  // it does with a course it has never heard of is untested.
-  if (req.url.startsWith('/api/courses/home')) {
-    body.courses.push(...readLocalCourses().map(localCourseEntry));
-  }
+  // Local courses go in both lists. The lobby builds its picker from
+  // /courses/home and needs the host-relative address; Desktop builds its
+  // library from /library/home and gets a full one (see localCourseEntry).
+  const origin = req.url.startsWith('/api/library/home') ? `http://${req.headers.host}` : '';
+  body.courses.push(...readLocalCourses().map((course) => localCourseEntry(course, origin)));
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
 }
