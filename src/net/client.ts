@@ -14,6 +14,7 @@ import {
   type NetShotResult,
   type NetShotLaunch,
   type NetAim,
+  type RoomRules,
 } from './types';
 
 export interface NetClientJoinParams {
@@ -21,6 +22,8 @@ export interface NetClientJoinParams {
   roomSecret?: string;
   courseUrl: string;
   players: OpenGolfSim.Player[];
+  /** the rules this client would play by; they apply only if it opens the room */
+  rules?: RoomRules;
   /**
    * Stable identity across reconnects. Defaults to a value persisted in
    * localStorage, so a reconnect (or a reload) reclaims this client's slot and
@@ -127,6 +130,7 @@ export class NetClient extends EventEmitter<NetClientEvents> {
         roomSecret: this.#join.roomSecret ?? '',
         courseUrl: this.#join.courseUrl,
         players: this.#join.players,
+        rules: this.#join.rules,
         clientKey: this.clientKey,
         sinceShot: this.shotsSeen,
       });

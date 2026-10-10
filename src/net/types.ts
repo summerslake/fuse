@@ -6,7 +6,7 @@
  */
 import { type HazardAction } from '@/courses/game';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 export { type HazardAction };
 
@@ -21,9 +21,27 @@ export interface RosterPlayer {
   ownerId: string;
 }
 
+/**
+ * The settings that decide scoring and how the ball behaves. They come from
+ * each player's own host app, so two machines rarely agree — and a ball on the
+ * green is worth a different number of putts depending on whose distances you
+ * ask. One set per room: whoever opens it supplies them, everyone else adopts
+ * them before building the game.
+ */
+export interface RoomRules {
+  practiceMode: boolean;
+  puttingEnabled: boolean;
+  /** auto-putt rings, metres from the pin: inside [0] is one putt, inside [1] two */
+  gimmeDistances: number[];
+  stimpLevel?: number;
+  elevation?: number;
+}
+
 export interface RoomSnapshot {
   code: string;
   courseUrl: string;
+  /** set by whoever opened the room; absent only for a room with no opinion */
+  rules?: RoomRules;
   roster: RosterPlayer[];
   /** true once the round is under way (the roster is frozen) */
   started: boolean;
@@ -86,6 +104,8 @@ export interface JoinMessage {
   roomSecret: string;
   courseUrl: string;
   players: OpenGolfSim.Player[];
+  /** this client's rules — used only if this join is the one that opens the room */
+  rules?: RoomRules;
   /**
    * Stable per-client identity, kept across reconnects. A returning client
    * reclaims its old clientId and its roster entries — which matters because

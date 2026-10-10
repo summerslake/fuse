@@ -57,13 +57,13 @@ the current state rather than approximately near it.
 
 ---
 
-## Wire protocol (v6)
+## Wire protocol (v7)
 
 JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 
 | Client → server | Meaning |
 |---|---|
-| `join` | claim these players; carries `clientKey` (stable across reconnects) and `sinceShot` |
+| `join` | claim these players; carries `clientKey` (stable across reconnects), `sinceShot`, and this client's `rules` |
 | `shot_launch` | I just swung — fly this live |
 | `aim_update` | I moved my aim or my ball while lining up (display only, not logged) |
 | `shot_result` | my ball came to rest here — and this is where I hit it from |
@@ -73,7 +73,7 @@ JSON over WebSocket, `type`-discriminated, mirroring `AppBridge`'s style.
 
 | Server → client | Meaning |
 |---|---|
-| `joined` | ack + room snapshot (roster, course, whether it's started) |
+| `joined` | ack + room snapshot (roster, course, rules, whether it's started) |
 | `roster` | someone joined or left |
 | `launch` | re-simulate this shot now |
 | `aim` | follow this player's aim (sent to everyone but the player aiming) |
@@ -90,6 +90,15 @@ to: a drop replayed out of sequence puts the ball somewhere nobody else has it.
 Note what a `hazard` message does *not* carry — where the drop landed. Only the
 choice travels, and every client recomputes the lie by raycasting a course it
 has already loaded, the same way turn order is derived rather than sent.
+
+**Rules belong to the room.** Practice mode, putting on/off, the auto-putt
+distances, green speed and elevation all arrive from each player's own host app,
+so no two machines agree — and a ball on the green is worth one putt inside the
+first distance, two inside the second. Scored with local settings, the same shot
+is a different number of strokes on each screen (this happened: 3 m / 7 m on one
+machine, 2 m / 4 m on the other). Every `join` carries the sender's rules; the
+relay keeps the ones from the join that opens the room, hands them back in every
+`joined`, and each client writes them over its own before building the game.
 
 `aim` is the one deliberately lossy message: throttled to ten a second, never
 logged, never replayed. Nothing depends on it. The aim that decides a shot

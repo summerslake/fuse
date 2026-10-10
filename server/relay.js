@@ -6,7 +6,7 @@ import { Room } from './room.js';
  * Bump when the message shapes change. Keep in sync with src/net/types.ts.
  * Clients on a different version are rejected on join with a readable error.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** One line per room event, so a host can see who's actually in a room. */
 function logRoom(room, message) {
@@ -140,9 +140,17 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
         });
         return;
       }
-      room = new Room(msg.roomCode, msg.courseUrl);
+      // Whoever opens the room sets its rules; every later joiner adopts them.
+      const rules = sanitizeRules(msg.rules);
+      room = new Room(msg.roomCode, msg.courseUrl, rules);
       rooms.set(msg.roomCode, room);
       console.log(`    [room ${msg.roomCode}] created  —  course ${msg.courseUrl.split('/').pop()}`);
+      if (rules) {
+        console.log(
+          `    [room ${msg.roomCode}] rules: ${rules.puttingEnabled ? 'putting on' : `auto-putt inside ${rules.gimmeDistances.join(' / ')} m`}` +
+            `${rules.practiceMode ? ', practice mode' : ''}`
+        );
+      }
     } else if (msg.courseUrl && room.courseUrl && msg.courseUrl !== room.courseUrl) {
       send(socket, {
         type: 'error',
@@ -236,6 +244,25 @@ export function createRelay({ port = 8080, host, secret = '' } = {}) {
 }
 
 /** Constant-time string compare that doesn't leak length via early return. */
+/**
+ * Keep only the rule fields we know, with the types we expect. This is relayed
+ * to every other player and written straight into their game setup.
+ */
+function sanitizeRules(rules) {
+  if (!rules || typeof rules !== 'object') return undefined;
+  const distances = Array.isArray(rules.gimmeDistances)
+    ? rules.gimmeDistances.filter((d) => Number.isFinite(d) && d >= 0).slice(0, 4)
+    : [];
+  const clean = {
+    practiceMode: rules.practiceMode === true,
+    puttingEnabled: rules.puttingEnabled === true,
+    gimmeDistances: distances,
+  };
+  if (Number.isFinite(rules.stimpLevel)) clean.stimpLevel = rules.stimpLevel;
+  if (Number.isFinite(rules.elevation)) clean.elevation = rules.elevation;
+  return clean;
+}
+
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a));
   const bb = Buffer.from(String(b));

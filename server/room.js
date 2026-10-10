@@ -11,10 +11,12 @@ export class Room {
   /**
    * @param {string} code       room code (join key)
    * @param {string} courseUrl  GLB url; first joiner sets it, others must match
+   * @param {object} [rules]    scoring/physics settings; first joiner sets them, others adopt
    */
-  constructor(code, courseUrl = '') {
+  constructor(code, courseUrl = '', rules = undefined) {
     this.code = code;
     this.courseUrl = courseUrl;
+    this.rules = rules;
     /** @type {Map<string, { socket: any, playerIds: string[], alive: boolean, clientKey: string }>} */
     this.clients = new Map();
     /** roster order === honors order off the tee. Player + ownerId, id namespaced. */
@@ -116,6 +118,7 @@ export class Room {
     return {
       code: this.code,
       courseUrl: this.courseUrl,
+      rules: this.rules,
       roster: this.roster,
       started: this.started,
     };

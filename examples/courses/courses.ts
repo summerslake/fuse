@@ -31,6 +31,8 @@ import {
   type GameEventMessage,
   type HazardAction,
   type NetAim,
+  type RoomRules,
+  DefaultGimmeDistances,
   UILaunchMonitor,
   UIHoleScoreToast
  } from '@opengolfsim/fuse';
@@ -1090,6 +1092,15 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     roomSecret: values.secret,
     courseUrl: course,
     players: setupData.players,
+    // Ours, in case we're the one opening the room. If someone else already
+    // has, theirs come back in `joined` and replace these (see applyRoomRules).
+    rules: {
+      practiceMode: !!setupData.practiceMode,
+      puttingEnabled: !!setupData.puttingEnabled,
+      gimmeDistances: setupData.gimmeDistances ?? [...DefaultGimmeDistances],
+      stimpLevel: setupData.stimpLevel,
+      elevation: setupData.elevation,
+    },
   });
   gameContext.net = net;
   (window as any).ogsNet = net;
@@ -1100,6 +1111,8 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
     gameContext.clientId = m.clientId;
     console.log(`[net] ${m.resumed ? 'resumed' : 'joined'} as`, m.clientId);
     if (m.resumed) lobby?.setReconnecting(false);
+    // Before anything is built: the game, the ball and the green all read these.
+    if (m.room?.rules) applyRoomRules(m.room.rules);
     // Joined without naming a course: play whatever the room is playing. Saves
     // the other players from having to pass around an exact GLB url.
     // Resumed into a round that's already under way (a reload, or Leave then
@@ -1164,6 +1177,29 @@ function joinRoom(values: UILobbyJoinParams, courseUrl: string) {
   });
 
   net.connect();
+}
+
+/**
+ * Play by the room's rules, not this machine's. Every player's host app has its
+ * own auto-putt distances, putting toggle, green speed and elevation; scored
+ * separately, the same ball on the same green is a different number of strokes
+ * on each screen.
+ */
+function applyRoomRules(rules: RoomRules) {
+  const setupData = gameContext.setupData;
+  if (!setupData) return;
+  const ours = JSON.stringify([
+    !!setupData.practiceMode, !!setupData.puttingEnabled, setupData.gimmeDistances, setupData.stimpLevel, setupData.elevation,
+  ]);
+  setupData.practiceMode = rules.practiceMode;
+  setupData.puttingEnabled = rules.puttingEnabled;
+  if (rules.gimmeDistances.length) setupData.gimmeDistances = [...rules.gimmeDistances];
+  if (rules.stimpLevel !== undefined) setupData.stimpLevel = rules.stimpLevel;
+  if (rules.elevation !== undefined) setupData.elevation = rules.elevation;
+  const theirs = JSON.stringify([
+    setupData.practiceMode, setupData.puttingEnabled, setupData.gimmeDistances, setupData.stimpLevel, setupData.elevation,
+  ]);
+  console.log(`[net] room rules${ours === theirs ? '' : ' (replacing this machine\'s)'}:`, rules);
 }
 
 /**

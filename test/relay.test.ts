@@ -79,6 +79,34 @@ describe('relay ↔ NetClient', () => {
     expect(roster.roster.every((p: any) => p.ownerId)).toBe(true);
   });
 
+  it('the room plays by the rules of whoever opened it', async () => {
+    const port = await startRelay();
+    const hostRules = { practiceMode: false, puttingEnabled: false, gimmeDistances: [3, 7], stimpLevel: 6, elevation: 0 };
+    const guestRules = { practiceMode: false, puttingEnabled: true, gimmeDistances: [2, 4, 80], stimpLevel: 10 };
+
+    const host = makeClient(port, { roomCode: 'rules', courseUrl: 'c.glb', players: playersFor('A'), rules: hostRules });
+    const hostJoined = once(host, 'joined');
+    host.connect();
+    expect((await hostJoined).room.rules).toEqual(hostRules);
+
+    // a different machine, different settings — it gets the room's, not its own
+    const guest = makeClient(port, { roomCode: 'rules', courseUrl: 'c.glb', players: playersFor('B'), rules: guestRules });
+    const guestJoined = once(guest, 'joined');
+    guest.connect();
+    expect((await guestJoined).room.rules).toEqual(hostRules);
+  });
+
+  it('drops anything in the rules it does not recognise', async () => {
+    const port = await startRelay();
+    const c = makeClient(port, {
+      roomCode: 'junk', courseUrl: 'c.glb', players: playersFor('A'),
+      rules: { puttingEnabled: 'yes', gimmeDistances: [3, 'far', -1, 7], players: ['x'], stimpLevel: 'fast' } as any,
+    });
+    const joined = once(c, 'joined');
+    c.connect();
+    expect((await joined).room.rules).toEqual({ practiceMode: false, puttingEnabled: false, gimmeDistances: [3, 7] });
+  });
+
   it('broadcasts a shot to everyone including the sender', async () => {
     const port = await startRelay();
     const { c1, c2, id1 } = await joinTwo(port);
