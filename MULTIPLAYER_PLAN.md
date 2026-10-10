@@ -237,25 +237,30 @@ real round on the Square. Everything below is toward that.
    (`GameSync` is scoring-only and assumes `CourseGame`). Simpler than the course
    mode, and it sets up **closest-to-the-pin**, which is mostly UI on top of
    shared shots.
-3c. **Review the logic when someone takes a drop from a hazard** (added
-   2026-10-09 — rounds have broken because of it in real play). Not yet
-   diagnosed; start by reproducing with two clients and a ball in the water.
-   - The path: `GameSync.resolveHazard` → relay `hazard_action` → every client
-     runs `CourseGame.applyHazardAction` (`src/courses/game.ts`), which for a
-     drop calls `_findDropPoint`, adds the penalty stroke, then `#advanceTurn`.
-   - First thing to check: `_findDropPoint` raycasts against
-     `course.getGroundMeshes()` on *each client separately*. Rehit and mulligan
-     only copy a stored position, but a drop computes a new one — if two
-     machines get different answers (different graphics quality, a mesh not
-     loaded yet, a client replaying the shot log on rejoin), their ball
-     positions differ, the away rule picks different players, and the round
-     desyncs. If that's it, the shooter should compute the drop point once and
-     send it in the message.
-   - Also look at: the `#awaitingHazardFor` guard (a dropped or duplicated
-     `hazard_action` leaves one client waiting forever), the no-valid-drop-point
-     fallback, and a drop taken right as the hole ends or a player reconnects.
-   - Write down what "broken" looked like next time it happens (stuck turn,
-     wrong player up, different scores on each screen) — it narrows this a lot.
+3c. **Hazard resolution broke rounds** (reported 2026-10-09; investigated and
+   fixed in code 2026-10-10 — **not yet confirmed in a real round**).
+   - **Root cause (reproduced in a test):** a ball in the water holds
+     `GolfBall.isShotActive` until the hazard is resolved, and that flag blocks
+     every new swing. Only the *shooter's* client released it. Every other
+     client had replayed the same splash on its own ball, stayed locked, and
+     could never hit — or watch a remote shot fly — again. Not specific to
+     drops: rehit and mulligan did the same. Fix: `GolfBall.reset()` now clears
+     the flag and the pending end-of-shot timer (`test/golfBall.test.ts`).
+   - **Also fixed:** the hazard dialog closed on click even if the message never
+     left (now it closes on the echo); `NetClient` silently dropped a shot
+     result or hazard choice sent while the socket was down (now queued and sent
+     on reconnect); a player who reloaded while owing a hazard decision never
+     got the dialog back (`CourseGame.awaitingHazardFor`, reopened after
+     catch-up).
+   - **Ruled out:** drop points differing between machines. Ground geometry is
+     the same at every quality level and world matrices are baked at load, so
+     `_findDropPoint` gives every client the same answer.
+   - **Still open:** `INVALID_DROP_SURFACES` lists `'bunker'`, which no surface
+     uses (it's `'sand'`), so a drop can be placed in a bunker — a rules
+     question, upstream's list, same on every client. And the `shotEnded`
+     handler in `courses.ts` calls `app.sendShotResult` for replayed remote
+     shots too, so the host app may be recording other players' shots as local
+     ones; check what Desktop does with them.
 3b. **Tell an intentional leave apart from a dropped connection.** Right now the
    relay treats both as a closed socket: mid-round it keeps the slot so the
    player can return. That's correct for a wifi blip and wrong for someone who
