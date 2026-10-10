@@ -193,6 +193,11 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
     });
   }
 
+  /** Id of the player who must resolve a ball in the water before play continues, if any. */
+  get awaitingHazardFor(): string | null {
+    return this.#awaitingHazardFor;
+  }
+
   /** True when the player whose turn it is belongs to this client. */
   get isLocalTurn(): boolean {
     return this.localPlayerIds.has(this.activePlayer.id);

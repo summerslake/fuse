@@ -209,6 +209,14 @@ describe('CourseGame — water hazards', () => {
     expect(player(g, 'p1').strokes).toBe(1);          // the shot itself counts
   });
 
+  it('reports who owes a hazard resolution, so a rejoining client can ask again', () => {
+    expect(g.awaitingHazardFor).toBe(null);
+    play(g, water(60));
+    expect(g.awaitingHazardFor).toBe('p1');
+    g.applyHazardAction('p1', 'drop');
+    expect(g.awaitingHazardFor).toBe(null);
+  });
+
   it('rehit replays from the previous spot, stroke still counted', () => {
     play(g, fairway(60));                             // p1 to 90 out
     play(g, fairway(10));                             // p2 to 140 out -> p2 away

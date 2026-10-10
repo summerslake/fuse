@@ -192,11 +192,14 @@ function flyRemoteShot(playerId: string, launch: { shot: OpenGolfSim.Shot, start
  */
 function resolveHazard(action: HazardAction) {
   if (gameContext.gameSync) {
+    // The dialog stays up until the echo applies it (the game's drop/mulligan/
+    // rehit events close it). Closing it here would strand the round if the
+    // message never made it: nothing owed on screen, a hazard owed in the game.
     gameContext.gameSync.resolveHazard(action);
   } else {
     gameContext.game?.applyHazardAction(gameContext.game.activePlayer.id, action);
+    gameContext.dialogs.hazard?.close();
   }
-  gameContext.dialogs.hazard?.close();
 }
 
 function setupNextShot() {
@@ -650,6 +653,12 @@ async function setupCourse() {
     gameContext.dialogs.hazard.on(action, () => resolveHazard(action));
   }
   gameContext.game.on('hazardRequested', resolveHazard);
+  // Rejoined (or reloaded) with one of our balls still in the water: the catch-
+  // up replay ran before this dialog existed, so ask now.
+  const owed = gameContext.game.awaitingHazardFor;
+  if (gameContext.gameSync && owed && gameContext.game.localPlayerIds.has(owed)) {
+    gameContext.dialogs.hazard.open();
+  }
 
   gameContext.mainMenu.on('help', () => app.help())
   gameContext.mainMenu.on('exit', () => app.exit())

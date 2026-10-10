@@ -95,6 +95,12 @@ export class NetClient extends EventEmitter<NetClientEvents> {
   #backoff = 500;
   readonly #maxBackoff = 5000;
   #reconnectTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Shot results and hazard resolutions that couldn't be sent because the
+   * socket was down. Everyone else's round is waiting on exactly these, so
+   * dropping one stalls the room for good; they go out once we've rejoined.
+   */
+  #outbox: ClientMessage[] = [];
 
   constructor(url: string, join: NetClientJoinParams) {
     super();
@@ -145,6 +151,8 @@ export class NetClient extends EventEmitter<NetClientEvents> {
       case 'joined':
         this.clientId = msg.clientId;
         this.emit('joined', msg);
+        // back in the room — send what we couldn't while we were away
+        for (const queued of this.#outbox.splice(0)) this.#send(queued);
         break;
       case 'roster':
         this.emit('roster', msg);
@@ -187,6 +195,9 @@ export class NetClient extends EventEmitter<NetClientEvents> {
   #send(msg: ClientMessage) {
     if (this.#ws && this.#ws.readyState === WebSocket.OPEN) {
       this.#ws.send(JSON.stringify(msg));
+    } else if (msg.type === 'shot_result' || msg.type === 'hazard_action') {
+      // a live launch is worthless late, but these two decide the round
+      this.#outbox.push(msg);
     }
   }
 

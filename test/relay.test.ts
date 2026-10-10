@@ -182,6 +182,32 @@ describe('relay ↔ NetClient', () => {
     expect(missed.result.endPosition).toEqual([0, 0, 30]);
   });
 
+  it('holds a shot result and a hazard choice made while offline, and sends them on reconnect', async () => {
+    const port = await startRelay();
+    const { c1, c2, id2 } = await joinTwo(port);
+    const started = once(c1, 'started');
+    c1.sendStart();
+    await started;
+
+    // c2's connection drops just as their ball stops in the water
+    c2.close();
+    await new Promise((r) => setTimeout(r, 100));
+    const launches: any[] = [];
+    c1.on('launch', (m) => launches.push(m));
+    c2.sendShotLaunch(id2, { shot: {}, start: [0, 0, 0], aim: [0, 0, 1] } as any);
+    c2.sendShotResult(id2, { endPosition: [0, 0, 60], isHoled: false, isInWater: true } as any);
+    c2.sendHazardAction(id2, 'drop');
+
+    // ...and comes back: the round was waiting on exactly those two messages
+    const shot = once(c1, 'shot');
+    const hazard = once(c1, 'hazard');
+    c2.connect();
+    expect((await shot).playerId).toBe(id2);
+    expect(await hazard).toMatchObject({ playerId: id2, action: 'drop' });
+    // a live launch is not replayed late — it would fly a shot that already landed
+    expect(launches).toHaveLength(0);
+  });
+
   it('keeps a dropped player in the roster mid-round, but not in the lobby', async () => {
     const port = await startRelay();
     const { c1, c2 } = await joinTwo(port, 'lobbyroom');
