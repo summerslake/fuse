@@ -237,6 +237,25 @@ real round on the Square. Everything below is toward that.
    (`GameSync` is scoring-only and assumes `CourseGame`). Simpler than the course
    mode, and it sets up **closest-to-the-pin**, which is mostly UI on top of
    shared shots.
+3c. **Review the logic when someone takes a drop from a hazard** (added
+   2026-10-09 — rounds have broken because of it in real play). Not yet
+   diagnosed; start by reproducing with two clients and a ball in the water.
+   - The path: `GameSync.resolveHazard` → relay `hazard_action` → every client
+     runs `CourseGame.applyHazardAction` (`src/courses/game.ts`), which for a
+     drop calls `_findDropPoint`, adds the penalty stroke, then `#advanceTurn`.
+   - First thing to check: `_findDropPoint` raycasts against
+     `course.getGroundMeshes()` on *each client separately*. Rehit and mulligan
+     only copy a stored position, but a drop computes a new one — if two
+     machines get different answers (different graphics quality, a mesh not
+     loaded yet, a client replaying the shot log on rejoin), their ball
+     positions differ, the away rule picks different players, and the round
+     desyncs. If that's it, the shooter should compute the drop point once and
+     send it in the message.
+   - Also look at: the `#awaitingHazardFor` guard (a dropped or duplicated
+     `hazard_action` leaves one client waiting forever), the no-valid-drop-point
+     fallback, and a drop taken right as the hole ends or a player reconnects.
+   - Write down what "broken" looked like next time it happens (stuck turn,
+     wrong player up, different scores on each screen) — it narrows this a lot.
 3b. **Tell an intentional leave apart from a dropped connection.** Right now the
    relay treats both as a closed socket: mid-round it keeps the slot so the
    player can return. That's correct for a wifi blip and wrong for someone who
