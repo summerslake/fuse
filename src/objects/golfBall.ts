@@ -115,6 +115,14 @@ export class GolfBall extends EventEmitter<GolfBallEvents> {
 
   reset(aimPoint: THREE.Vector3, startPoint: THREE.Vector3, holePoint?: THREE.Vector3) {
     this.isShotWaiting = false;
+    // A reset ball is ready to be hit. A ball in the water holds isShotActive
+    // until the hazard is resolved, and only the shooter's own client used to
+    // release it — every other client had replayed the same splash on its own
+    // ball, stayed locked, and could never swing (or watch a shot) again. The
+    // pending end-of-shot timer goes too: left alone it fires on the *next*
+    // shot's ball, re-locking it or reporting a landing that never happened.
+    clearTimeout(this.#timeout);
+    this.isShotActive = false;
 
     this.object.visible = true;
     this.startPoint.copy(startPoint);
