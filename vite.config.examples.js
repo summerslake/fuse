@@ -94,6 +94,12 @@ function desktopCompat(server) {
     if (req.url.startsWith('/api/')) {
       console.log(`    [api] ${req.method} ${req.url.split('?')[0]}`);
     }
+    // Game pages and their scripts, with who asked — a guest's black screen is
+    // otherwise indistinguishable between "never arrived" and "stalled loading".
+    if (/\/(index\.html|assets\/[^/]+\.js)(\?|$)/.test(req.url)) {
+      const who = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      console.log(`    [page] ${who} ${req.url.split('?')[0]}`);
+    }
 
     // Add our tile to the library on its way through. Everything else under
     // /api is proxied untouched.
