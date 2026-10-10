@@ -3,3 +3,4 @@ dist
 tmp
 backups
 .DS_Store
+courses.local.json

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import path from 'path';
+import fs from 'fs';
 
 /**
  * Everything OGS Desktop needs from whatever server we point `app_url` at.
@@ -57,6 +58,89 @@ const MULTIPLAYER_TILE = {
   gameEngine: 'webgl',
 };
 
+/**
+ * Courses that live on this machine rather than in OpenGolfSim's catalog — a
+ * Meshery export, typically. List them in `courses.local.json` at the repo root
+ * (gitignored; see courses.local.example.json):
+ *
+ *   [{ "title": "My Course", "file": "/absolute/path/to/course.glb" }]
+ *
+ * Each one is served at `/local-courses/<slug>.glb` and added to the lobby's
+ * course picker. The address is deliberately host-relative: a guest loads the
+ * page from this server, so the same path reaches the same file from their
+ * machine, and every client in a room names the course identically.
+ */
+const LOCAL_COURSES_FILE = path.resolve(import.meta.dirname, 'courses.local.json');
+const LOCAL_COURSES_PATH = '/local-courses/';
+
+function readLocalCourses() {
+  let entries;
+  try {
+    entries = JSON.parse(fs.readFileSync(LOCAL_COURSES_FILE, 'utf-8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') console.warn(`    ⚠  courses.local.json: ${err.message}`);
+    return [];
+  }
+  if (!Array.isArray(entries)) return [];
+  const courses = [];
+  for (const entry of entries) {
+    if (!entry?.title || !entry?.file) continue;
+    if (!fs.existsSync(entry.file)) {
+      console.warn(`    ⚠  local course "${entry.title}": no file at ${entry.file}`);
+      continue;
+    }
+    const slug = String(entry.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    courses.push({ title: entry.title, file: entry.file, slug });
+  }
+  return courses;
+}
+
+/** A local course as the lobby's picker (and Desktop's catalog format) expects it. */
+function localCourseEntry(course) {
+  return {
+    title: course.title,
+    description: 'Local course served by this host',
+    url: '/fuse/examples/courses/index.html',
+    gameMode: 2,
+    engine: 2,
+    courseUrl: `${LOCAL_COURSES_PATH}${course.slug}.glb`,
+    slug: `local_${course.slug.replace(/-/g, '_')}`,
+    gameEngine: 'webgl',
+  };
+}
+
+/**
+ * Serve a local course file. HEAD and byte ranges matter: the course loader
+ * asks for the size first and then downloads in chunks, so a multi-megabyte
+ * GLB shows progress and survives a slow link.
+ */
+function serveLocalCourse(req, res) {
+  const slug = decodeURIComponent(req.url.split('?')[0].slice(LOCAL_COURSES_PATH.length)).replace(/\.glb$/, '');
+  const course = readLocalCourses().find((c) => c.slug === slug);
+  if (!course) {
+    res.writeHead(404).end('No such local course');
+    return;
+  }
+  const { size } = fs.statSync(course.file);
+  const headers = { 'content-type': 'model/gltf-binary', 'accept-ranges': 'bytes', 'cache-control': 'no-cache' };
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (!range) {
+    res.writeHead(200, { ...headers, 'content-length': size });
+    if (req.method === 'HEAD') return res.end();
+    fs.createReadStream(course.file).pipe(res);
+    return;
+  }
+  const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+  const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+  if (start > end || start >= size) {
+    res.writeHead(416, { 'content-range': `bytes */${size}` }).end();
+    return;
+  }
+  res.writeHead(206, { ...headers, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${size}` });
+  if (req.method === 'HEAD') return res.end();
+  fs.createReadStream(course.file, { start, end }).pipe(res);
+}
+
 async function serveLibraryWithMultiplayer(req, res) {
   const upstream = new URL(req.url, 'https://app.opengolfsim.com');
   let body = { courses: [] };
@@ -78,6 +162,12 @@ async function serveLibraryWithMultiplayer(req, res) {
     );
   }
   body.courses = [MULTIPLAYER_TILE, ...(body.courses ?? [])];
+  // The lobby builds its course picker from /courses/home. Desktop's own
+  // library is left alone: it would list these as installable tiles, and what
+  // it does with a course it has never heard of is untested.
+  if (req.url.startsWith('/api/courses/home')) {
+    body.courses.push(...readLocalCourses().map(localCourseEntry));
+  }
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
 }
@@ -99,6 +189,12 @@ function desktopCompat(server) {
     if (/\/(index\.html|assets\/[^/]+\.js)(\?|$)/.test(req.url)) {
       const who = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
       console.log(`    [page] ${who} ${req.url.split('?')[0]}`);
+    }
+
+    if (req.url.startsWith(LOCAL_COURSES_PATH)) {
+      const who = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      if (!req.headers.range) console.log(`    [course] ${who} ${req.method} ${req.url.split('?')[0]}`);
+      return serveLocalCourse(req, res);
     }
 
     // Add our tile to the library on its way through. Everything else under
