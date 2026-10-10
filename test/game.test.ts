@@ -361,7 +361,9 @@ describe('CourseGame — merged from upstream', () => {
     g.on('playerHoleEnded', (r) => ended.push(r));
     play(g, fairway(100));
     play(g, { endPosition: V(0, 0, 150), surface: 'green', isHoled: true });
-    expect(ended).toEqual([{ player: 'p1', score: 2, toPar: -1, label: 'Birdie' }]);
+    expect(ended).toEqual([
+      { player: 'p1', score: 2, toPar: -1, label: 'Birdie', hole: { number: '1', par: 3 } },
+    ]);
   });
 
   it('keeps no score in practice mode', () => {

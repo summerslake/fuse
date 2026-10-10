@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, deinterleaveGeometry } from 'three/addons/utils/BufferGeometryUtils.js';
 import { type World } from '@dimforge/rapier3d-compat';
 import { seededRandom } from '@/utils/random';
 import { isMeshObject } from '@/utils/mesh';
@@ -369,6 +369,8 @@ export class TreePlanter {
         const childMat = child.material as THREE.Material;
         if ((childMat.userData as any)?.impostor) {
           const geo = child.geometry.clone();
+          // Source models can mix packed (interleaved) and separate vertex data; merge needs one layout
+          deinterleaveGeometry(geo);
           child.updateWorldMatrix(true, false);
           const localMatrix = new THREE.Matrix4();
           localMatrix.copy(sourceGroup.matrixWorld).invert().multiply(child.matrixWorld);
@@ -415,6 +417,11 @@ export class TreePlanter {
 
         material.transparent = false;
         material.depthWrite = true;
+      } else if ((material.userData as any)?.batch === 'foliage' && material.transparent) {
+        // Blended foliage: keep soft edges, but write depth and drop near-empty
+        // pixels so overlapping instances in a batch don't draw in the wrong order
+        material.depthWrite = true;
+        material.alphaTest = Math.max(material.alphaTest, 0.1);
       }
 
       // Billboard-only = this material has geometry at no other level
@@ -508,6 +515,10 @@ export class TreePlanter {
 
     const meta = (material.userData as any).impostor as ImpostorMeta;
     const map = (material as THREE.MeshStandardMaterial).map!;
+    const normalAtlas = (meta as any).normals
+      ? (material as THREE.MeshStandardMaterial).normalMap ?? undefined
+      : undefined;
+
     // const center = new THREE.Vector3(...meta.center);
     // Derive size/placement from the quad geometry itself — it went through the
     // same export-scale pipeline as the mesh LODs, unlike the baked metadata.
@@ -559,7 +570,7 @@ export class TreePlanter {
       geo.setAttribute('iColor', colorAttr);
     }
 
-    const mat = createImpostorMaterial(map, resolved, posScale, yaw, this.qualityLevel, colorAttr);    
+    const mat = createImpostorMaterial(map, resolved, posScale, yaw, this.qualityLevel, colorAttr, undefined, normalAtlas);
 
     const mesh = new THREE.Mesh(geo, mat);
     // In-shader world placement → three.js can't cull this correctly per-mesh

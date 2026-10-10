@@ -32,6 +32,7 @@ const SCORE_LABELS: Record<string, string> = {
 type ScoreResult = {
   score: number;
   toPar: number;
+  hole: { number: string; par: number };
   player: string;
   label: string;
 }
@@ -281,6 +282,7 @@ export class CourseGame extends EventEmitter<CourseGameEvents> {
       this.emit('playerHoleEnded', {
         player: player.name,
         score: newHoleScore,
+        hole: { number: this.activeHole.number, par: this.activeHole.par },
         toPar: scoreParDiff,
         label: newHoleScore === 1 ? 'Hole in One!' : SCORE_LABELS?.[`${scoreParDiff}`]
       });
