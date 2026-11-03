@@ -38,9 +38,9 @@ const desktopProxy = {
  * launches redirects to the diagnostics page instead — that's the spike.
  */
 /**
- * OGS Desktop builds its library from `${app_url}/api/library/home` (older
- * builds: `/api/courses/home`), which we proxy — so we can hand it one extra
- * tile. "Multiplayer" launches our lobby
+ * OGS Desktop builds its library from `${app_url}/api/library/all` (1.21+;
+ * 1.20.x used `/api/library/home`, older builds `/api/courses/home`), which
+ * we proxy — so we can hand it one extra tile. "Multiplayer" launches our lobby
  * entry page with no course attached; the lobby picks the course itself, which
  * is why this entry deliberately has no `courseUrl`.
  *
@@ -112,7 +112,7 @@ function localCourseEntry(course, origin = '') {
   return {
     title: course.title,
     description: 'Local course served by this host',
-    url: '/fuse/examples/courses/index.html',
+    url: `${origin}/fuse/examples/courses/index.html`,
     gameMode: 2,
     engine: 2,
     courseUrl: `${base}.glb`,
@@ -165,6 +165,11 @@ function serveLocalCourse(req, res) {
   fs.createReadStream(course.file, { start, end }).pipe(res);
 }
 
+/** Desktop's library list: `/library/all` from 1.21, `/library/home` before. */
+function isDesktopLibrary(url) {
+  return url.startsWith('/api/library/all') || url.startsWith('/api/library/home');
+}
+
 async function serveLibraryWithMultiplayer(req, res) {
   const upstream = new URL(req.url, 'https://app.opengolfsim.com');
   let body = { courses: [] };
@@ -185,11 +190,13 @@ async function serveLibraryWithMultiplayer(req, res) {
         '       Sign-in, the full library and first-time course downloads need internet.\n'
     );
   }
-  body.courses = [MULTIPLAYER_TILE, ...(body.courses ?? [])];
-  // Local courses go in both lists. The lobby builds its picker from
-  // /courses/home and needs the host-relative address; Desktop builds its
-  // library from /library/home and gets a full one (see localCourseEntry).
-  const origin = req.url.startsWith('/api/library/home') ? `http://${req.headers.host}` : '';
+  // Our entries go in both lists. The lobby builds its picker from
+  // /courses/home and needs host-relative addresses; Desktop builds its library
+  // from /library/* and gets full ones, like every catalog entry. 1.21 hands a
+  // tile's `url` to the game window untouched, so a bare path may not load.
+  const origin = isDesktopLibrary(req.url) ? `http://${req.headers.host}` : '';
+  const tile = { ...MULTIPLAYER_TILE, url: `${origin}${MULTIPLAYER_TILE.url}` };
+  body.courses = [tile, ...(body.courses ?? [])];
   body.courses.push(...readLocalCourses().map((course) => localCourseEntry(course, origin)));
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -222,7 +229,7 @@ function desktopCompat(server) {
 
     // Add our tile to the library on its way through. Everything else under
     // /api is proxied untouched.
-    if (req.url.startsWith('/api/library/home') || req.url.startsWith('/api/courses/home')) {
+    if (isDesktopLibrary(req.url) || req.url.startsWith('/api/courses/home')) {
       return serveLibraryWithMultiplayer(req, res).catch(() => next());
     }
     if (req.url.startsWith('/fuse/examples/')) {
