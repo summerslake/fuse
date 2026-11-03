@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 /**
  * Everything OGS Desktop needs from whatever server we point `app_url` at.
@@ -206,6 +209,32 @@ async function serveLibraryWithMultiplayer(req, res) {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * The Custom Games tiles (scripts/install-desktop-launcher.mjs) for whoever
+ * asks, as a tar, pointed at the address they reached us on. A guest installs
+ * them with one Terminal command (docs/PLAYING-WITH-A-FRIEND.md). Fetched by
+ * curl, nothing is quarantined, so macOS has nothing to warn about, and the IP
+ * and course list are always current.
+ */
+async function serveGuestTiles(req, res) {
+  const host = `http://${req.headers.host}`;
+  const self = `http://localhost:${req.socket.localPort}`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ogs-tiles-'));
+  try {
+    const run = promisify(execFile);
+    await run(process.execPath, ['scripts/install-desktop-launcher.mjs', host, '--out', dir, '--source', self]);
+    const { stdout } = await run('tar', ['-C', dir, '-cf', '-', '.'], { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+    const who = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    console.log(`    [tiles] ${who} downloaded the Custom Games tiles (→ ${host})`);
+    res.writeHead(200, { 'content-type': 'application/x-tar', 'cache-control': 'no-store' });
+    res.end(stdout);
+  } catch (err) {
+    res.writeHead(500).end(`Couldn't build the tiles: ${err.message}\n`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function desktopCompat(server) {
   const diagnostics = process.env.OGS_DIAG === '1';
   server.middlewares.use((req, res, next) => {
@@ -223,6 +252,10 @@ function desktopCompat(server) {
     if (/\/(index\.html|assets\/[^/]+\.js)(\?|$)/.test(req.url)) {
       const who = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
       console.log(`    [page] ${who} ${req.url.split('?')[0]}`);
+    }
+
+    if (req.url.split('?')[0] === '/guest-tiles.tar') {
+      return void serveGuestTiles(req, res);
     }
 
     if (req.url.startsWith(LOCAL_COURSES_PATH)) {
@@ -258,23 +291,19 @@ function desktopCompat(server) {
 
 /** Host the multiplayer relay in-process, so one command serves game + room. */
 async function startRelay() {
+  // One relay per process. A config edit makes vite re-run this in the same
+  // process, and it sets up the new server before closing the old one, so a
+  // fresh relay would find the port still taken and never start. Reusing the
+  // running one avoids that, and keeps rooms alive across the reload. (Edits
+  // to server/relay.js itself still need a full restart.)
+  if (globalThis.__ogsRelay) return globalThis.__ogsRelay;
   const port = Number(process.env.OGS_MP_PORT || 8080);
   const secret = process.env.OGS_MP_SECRET || '';
   try {
     const { createRelay } = await import('./server/relay.js');
-    // A config edit restarts vite in-process: the old relay is told to close,
-    // but may still hold the port for a moment. Retry briefly before giving up.
-    let relay;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        relay = createRelay({ port, secret });
-        await relay.ready;
-        break;
-      } catch (err) {
-        if (err.code !== 'EADDRINUSE' || attempt >= 10) throw err;
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    }
+    const relay = createRelay({ port, secret });
+    await relay.ready;
+    globalThis.__ogsRelay = relay;
     console.log(
       `    Multiplayer relay: ws://localhost:${port}` +
         (secret ? '' : '  (no OGS_MP_SECRET — LAN/dev only)') +
@@ -282,9 +311,8 @@ async function startRelay() {
     );
     return relay;
   } catch (err) {
-    // Be specific: a config edit restarts vite while the old process still holds
-    // the port, and the relay then silently isn't there — which looks exactly
-    // like a blocked WebSocket from the client side.
+    // Be specific: a relay that silently isn't there looks exactly like a
+    // blocked WebSocket from the client side.
     const hint =
       err.code === 'EADDRINUSE'
         ? `port ${port} is already in use — another dev server or relay is still running.\n` +
@@ -296,9 +324,9 @@ async function startRelay() {
 }
 
 /**
- * Startup banner. Prints the command to launch your own Desktop against this
- * server, and — since a remote guest needs an address you can't see from the
- * Local/Network lines — looks up the public IP and prints the exact command to
+ * Startup banner. Prints how to get the Custom Games tiles into your own
+ * Desktop, and (since a remote guest needs an address you can't see from the
+ * Local/Network lines) looks up the public IP and prints the exact command to
  * send them.
  */
 function printBanner(server) {
@@ -307,28 +335,31 @@ function printBanner(server) {
   server.printUrls = () => {
     console.log('\n    FUSE Examples running\n');
     _print();
-    // NB: use `open --env`, not a direct binary launch — running the executable
-    // from a terminal loses the bundle's TCC grants, and the Square plugin then
-    // can't reach Bluetooth ("Noble powered on" timeout).
     console.log(
-      `    You:    open --env OGS_APP_URL=http://localhost:${port} -a "/Applications/OpenGolfSim.app"` +
+      `    You:    node scripts/install-desktop-launcher.mjs http://localhost:${port}\n` +
+        '            then open OpenGolfSim normally → Custom Games' +
         (process.env.OGS_DIAG === '1'
-          ? '\n    OGS_DIAG=1 — every game Desktop launches will serve the diagnostics page'
+          ? '\n    OGS_DIAG=1 — needs Desktop launched with OGS_APP_URL; every game it launches serves the diagnostics page'
           : '')
     );
     printGuestCommand(port);
   };
 }
 
-/** Look up the public IP so you can tell a remote guest where to point. */
+/** The one Terminal line a Mac guest pastes to install the tiles (see serveGuestTiles). */
+function guestInstallCommand(address) {
+  const dir = '~/Library/Application\\ Support/opengolfsim-desktop/fuse';
+  return `mkdir -p ${dir} && curl -fsSL http://${address}/guest-tiles.tar | tar -xf - -C ${dir}`;
+}
+
 async function printGuestCommand(port) {
   try {
     const response = await fetch('https://ifconfig.me/ip', { signal: AbortSignal.timeout(4000) });
     const ip = (await response.text()).trim();
     if (!/^[0-9a-fA-F.:]+$/.test(ip)) throw new Error(`unexpected response`);
     console.log(
-      `    Guest:  open --env OGS_APP_URL=http://${ip}:${port} -a "/Applications/OpenGolfSim.app"\n` +
-        `            (needs TCP ${port} and 8080 forwarded to this machine)\n`
+      `    Guest (Mac Terminal, once):\n      ${guestInstallCommand(`${ip}:${port}`)}\n` +
+        `            Windows: docs/PLAYING-WITH-A-FRIEND.md. Needs TCP ${port} and 8080 forwarded here.\n`
     );
   } catch (err) {
     console.log(
@@ -390,12 +421,12 @@ export default defineConfig({
       // game and hosts the room. Fails soft if server/ deps aren't installed.
       name: 'ogs-mp-relay',
       async configureServer(server) {
-        const relay = await startRelay();
-        if (relay) server.httpServer?.once('close', () => relay.close());
+        // The relay lives as long as the process (see startRelay).
+        await startRelay();
       },
       async configurePreviewServer(server) {
-        const relay = await startRelay();
-        if (relay) server.httpServer?.once('close', () => relay.close());
+        // The relay lives as long as the process (see startRelay).
+        await startRelay();
       },
     },
   ],

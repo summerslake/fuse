@@ -142,14 +142,19 @@ relay, staying in sync across a full round and across a water hazard.
 These exist only because we're standing in for OGS's own infrastructure. None
 would survive contact with the real thing — upstream would do each properly.
 
-- **The Multiplayer tile is injected into `/api/courses/home`** as it passes
-  through our dev proxy. Desktop is closed-source and builds its library from
-  that endpoint, so this was the only way to add an entry. Upstream would just
-  add the catalog entry.
+- **Custom Games tiles that forward to the host** (`desktop-launcher/`,
+  `scripts/install-desktop-launcher.mjs`, served to guests as
+  `/guest-tiles.tar`). Since Desktop 1.21, any folder in `<userData>/fuse/`
+  shows up under Custom Games; ours just send the game window to the host's
+  page. Upstream would add a catalog entry. The older route still works:
+  launched with `OGS_APP_URL`, Desktop reads its library through our proxy,
+  which injects the tiles (into `/api/library/all`, `/library/home` and
+  `/courses/home`, depending on version).
 - **`/fuse/examples/...` path rewriting**, because Desktop launches
   `${app_url}/fuse/examples/<game>/index.html` and our dev root is `examples/`.
-- **Proxying `/api` to `app.opengolfsim.com`**, because overriding `OGS_APP_URL`
-  repoints sign-in, the library and the store as well as the game.
+- **Proxying `/api` to `app.opengolfsim.com`** (old route only), because
+  overriding `OGS_APP_URL` repoints sign-in, the library and the store as well
+  as the game.
 
 ---
 
@@ -216,6 +221,6 @@ for it to act on.
 See [HOSTING.md](./HOSTING.md) for the host and
 [PLAYING-WITH-A-FRIEND.md](./PLAYING-WITH-A-FRIEND.md) for the guest. Short
 version: the host runs `npm run host` and forwards TCP 5173 and 8080; the guest
-launches OGS Desktop with `OGS_APP_URL` pointed at the host and needs no repo, no
-node, and no matching OpenGolfSim version — they load the host's build, so both
-ends run identical code by construction.
+installs the tiles with one Terminal command, opens OpenGolfSim 1.21+ normally,
+and needs no repo and no node. They load the host's build, so both ends run
+identical code by construction.
