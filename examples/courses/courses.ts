@@ -540,6 +540,12 @@ async function handleSetup(payload: any) {
   setupHandled = true;
   gameContext.setupData = payload?.setupData as OpenGolfSim.SetupData;
   gameContext.gameData = payload?.gameData as OpenGolfSim.GameData;
+  // A Custom Games tile (desktop-launcher/) can't attach a course — Desktop
+  // only knows its folder — so the launcher names it in the address instead.
+  const queryCourse = new URLSearchParams(window.location.search).get('courseUrl');
+  if (!gameContext.gameData.courseUrl && queryCourse) {
+    gameContext.gameData = { ...gameContext.gameData, courseUrl: queryCourse };
+  }
   // the host app owns the player list here — real names, real club distances
   gameContext.playersFromHost = true;
 

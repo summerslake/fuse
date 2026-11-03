@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FUSE Multiplayer</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; color: #ddd; font: 16px system-ui, sans-serif; }
+    main { height: 100%; display: grid; place-items: center; text-align: center; padding: 0 16px; }
+    code { color: #fff; }
+  </style>
+</head>
+<body>
+  <main><p id="status">Connecting to the host…</p></main>
+  <script>
+    // OGS Desktop lists this folder under "Custom Games" and opens this page in
+    // its game window. We hand that window over to the host's game page (the
+    // multiplayer lobby, or a local course); Desktop's bridge (shots, players,
+    // clubs) comes along, because it is attached to the window, not the page.
+    //
+    // Both are filled in by scripts/install-desktop-launcher.mjs.
+    const HOST = '__HOST__';
+    const target = HOST + '__PATH__';
+    const status = document.getElementById('status');
+
+    // Check first: a host that's offline would otherwise leave a browser error
+    // page in the game window with no hint of what went wrong.
+    const timeout = new AbortController();
+    setTimeout(() => timeout.abort(), 8000);
+    fetch(target, { method: 'HEAD', signal: timeout.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        location.replace(target);
+      })
+      .catch((err) => {
+        status.innerHTML =
+          `Can't reach the multiplayer host at <code>${HOST}</code> (${err.name === 'AbortError' ? 'timed out' : err.message}).<br>` +
+          'Make sure the host is running <code>npm run host</code>, then exit and try again.';
+      });
+  </script>
+</body>
+</html>
