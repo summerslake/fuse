@@ -11,13 +11,29 @@
  * running (npm run dev / npm run host) so we can ask it for its course list.
  * Restart Desktop to see the tiles. Re-run to pick up new courses or a new
  * host; delete the folders to remove them.
+ *
+ * For a guest, build the folders somewhere else instead and send them over:
+ *
+ *   node scripts/install-desktop-launcher.mjs http://<public-ip>:5173 \
+ *     --out ./guest-tiles --source http://localhost:5173
+ *
+ * --source is where to read the course list from (your own machine often
+ * can't reach itself on its public address); the tiles still point at <host>.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const host = (process.argv[2] || 'http://localhost:5173').replace(/\/+$/, '');
+const args = process.argv.slice(2);
+const option = (name) => {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args.splice(i, 2)[1];
+};
+const outDir = option('--out');
+const sourceArg = option('--source');
+const host = (args[0] || 'http://localhost:5173').replace(/\/+$/, '');
+const listFrom = (sourceArg || host).replace(/\/+$/, '');
 if (!/^https?:\/\/[^/]+$/.test(host)) {
   console.error(`Expected a host like http://1.2.3.4:5173, got "${host}"`);
   process.exit(1);
@@ -29,7 +45,7 @@ const userData =
     : process.platform === 'win32'
       ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData/Roaming'), 'opengolfsim-desktop')
       : path.join(os.homedir(), '.config/opengolfsim-desktop');
-if (!fs.existsSync(userData)) {
+if (!outDir && !fs.existsSync(userData)) {
   console.error(`OGS Desktop's data folder isn't at ${userData} — is Desktop installed and opened once?`);
   process.exit(1);
 }
@@ -37,7 +53,7 @@ if (!fs.existsSync(userData)) {
 const source = path.join(path.dirname(fileURLToPath(import.meta.url)), '../desktop-launcher');
 const template = fs.readFileSync(path.join(source, 'index.html'), 'utf8');
 const defaultPoster = fs.readFileSync(path.join(source, 'poster.jpg'));
-const gamesDir = path.join(userData, 'fuse');
+const gamesDir = outDir ? path.resolve(outDir) : path.join(userData, 'fuse');
 const PREFIX = 'fuse-';
 
 // The host's lobby list carries its local courses (slug local_*) with
@@ -45,11 +61,11 @@ const PREFIX = 'fuse-';
 // started from a tile matches one started from the picker.
 let catalog;
 try {
-  const res = await fetch(`${host}/api/courses/home?platform=darwin&fuse=1`);
+  const res = await fetch(`${listFrom}/api/courses/home?platform=darwin&fuse=1`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   catalog = (await res.json()).courses ?? [];
 } catch (err) {
-  console.error(`Couldn't get the course list from ${host} (${err.message}). Is the host running?`);
+  console.error(`Couldn't get the course list from ${listFrom} (${err.message}). Is the host running?`);
   process.exit(1);
 }
 
@@ -61,7 +77,7 @@ const tiles = [
       folder: `${PREFIX}${c.slug.replace(/_/g, '-')}`,
       name: c.title,
       page: `/fuse/examples/courses/index.html?courseUrl=${encodeURIComponent(c.courseUrl)}`,
-      poster: c.posterUrl?.startsWith('/') ? `${host}${c.posterUrl}` : undefined,
+      poster: c.posterUrl?.startsWith('/') ? `${listFrom}${c.posterUrl}` : undefined,
     })),
 ];
 
@@ -92,4 +108,5 @@ for (const entry of fs.readdirSync(gamesDir)) {
   }
 }
 
-console.log(`\nInstalled into ${gamesDir} (host ${host}).\nRestart OGS Desktop to see them under Custom Games.`);
+console.log(`\nInstalled into ${gamesDir} (host ${host}).`);
+if (!outDir) console.log('Restart OGS Desktop to see them under Custom Games.');
