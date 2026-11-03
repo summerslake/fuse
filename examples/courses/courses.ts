@@ -338,6 +338,14 @@ async function setupControls() {
   gameContext.controls.on('testShot', launchShot);
   gameContext.controls.on('toggleStats', () => gameContext.stats?.toggle());
   gameContext.controls.on('mulligan', () => resolveHazard('mulligan'));
+  gameContext.controls.on('club', (direction) => {
+    // Multiplayer: the active player is someone else's while we spectate.
+    if (gameContext.game && !isSpectating()) {
+      gameContext.game.clubUpDown(direction);
+      gameContext.playerMenu?.update(gameContext.game.activePlayer);
+      app.sendPlayerUpdate(gameContext.game.activePlayer, gameContext.startPoint.toArray());
+    }
+  });
   gameContext.controls.on('rehit', () => resolveHazard('rehit'));
   gameContext.controls.on('scorecard', () => gameContext.dialogs.scorecard?.toggle());
 }
@@ -657,6 +665,7 @@ async function setupCourse() {
   });
 
   await setupControls();
+  await gameContext.course.afterSetup(gameContext.golfBall);
   
   if (gameContext.renderer.environment) {
     gameContext.course.updateEnvironment(gameContext.renderer.environment);
@@ -950,7 +959,8 @@ function animate(animDelta: number) {
     gameContext.aimPoint,
     gameContext.distanceToAim,
     gameContext.heightToAim,
-    !!gameContext.golfBall?.isShotActive
+    !!gameContext.golfBall?.isShotActive,
+    !!gameContext.golfBall?.isOnGreen(true),
   );
 
   gameContext.stats?.end();

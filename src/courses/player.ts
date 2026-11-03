@@ -19,14 +19,15 @@ export class CoursePlayer {
   scorecard: Map<string, number>;
   finishedHoles: Set<string>;
 
-  constructor(player: OpenGolfSim.Player) {
+  constructor(player: OpenGolfSim.Player, disablePutting = false) {
     this.player = player;
     this.name = player.name;
     this.id = player.id;
     // A host app can hand us a player with no bag — a guest added in OGS
     // Desktop's player manager arrives with `clubs` undefined, and reading
     // clubs[0] off that took the whole round down before it loaded.
-    this.clubs = player.clubs?.length ? player.clubs : [...DefaultClubs];
+    const clubs = player.clubs?.length ? player.clubs : [...DefaultClubs];
+    this.clubs = disablePutting ? clubs.filter(club => club.distance > 0) : clubs;
     this.boost = player.boost ?? 1;
     this.disabled = false;
 

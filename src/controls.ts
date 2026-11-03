@@ -7,6 +7,7 @@ interface CourseKeyboardControlEvents {
   testShot: (shot: OpenGolfSim.Shot) => void;
   toggleStats: () => void;
   scorecard: () => void;
+  club: (direction: number) => void;
   mulligan: () => void;
   rehit: () => void;
   fullscreen: () => void;
@@ -40,18 +41,19 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
     this.#swipeShots = options.swipeShots ?? false;
     this.aimKeys = { left: false, right: false, forward: false, backward: false };    
 
+    // Stop the browser from claiming touches for pan/zoom. Without this,
+    // Chrome fires pointercancel after a few px of movement.
+    document.documentElement.style.touchAction = 'none';
+
     window.addEventListener('keydown', this.#keyHandler.bind(this), true); // true = capture phase
     window.addEventListener('keyup',   this.#keyHandler.bind(this), true);
-    // // Reset aim state when the window loses focus (Cmd+Tab, etc.)
-    // window.addEventListener('blur', this.#resetAimKeys.bind(this));
-    // Reset aim/gesture state when the window loses focus (Cmd+Tab, etc.)
-    window.addEventListener('blur', () => { this.#gestureCancel(); this.#resetAimKeys(); });
 
-    // document.addEventListener('touchend', this.#touchEnd.bind(this));
-    // document.addEventListener('touchstart', this.#touchStart.bind(this), { passive: false });
-    // document.addEventListener('touchmove', this.#touchMove.bind(this), { passive: false });
-    // document.addEventListener('touchend', this.#touchEnd.bind(this));
-    // document.addEventListener('touchcancel', this.#touchCancel.bind(this));
+    // Reset aim/gesture state when the window loses focus (Cmd+Tab, etc.)
+    window.addEventListener('blur', () => {
+      this.#gestureCancel();
+      this.#resetAimKeys();
+    });
+
     // Pointer events unify mouse + touch
     document.addEventListener('pointerdown', this.#pointerDown.bind(this));
     document.addEventListener('pointermove', this.#pointerMove.bind(this));
@@ -64,7 +66,6 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
 
     app.on('command', (key, state) => {
       if (!this.#enabled) return;
-      console.log('COMMAND', key, state);
 
       if (key.ogs_code === OGSKeyCommands.AimLeft) {
         this.aimKeys.left = state === 'down';
@@ -127,7 +128,6 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
 
     const pressed = event.type === 'keydown';
     let handled = false;
-    // const isCommand = event.metaKey || event.ctrlKey;
     const isCommand = event.metaKey || event.ctrlKey || event.altKey
     if (isCommand) {
       return;
@@ -137,6 +137,14 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
         case 'KeyS':
         case 'KeyV':
           this.emit('toggleStats');
+          handled = true;
+          break;
+        case 'KeyW':
+          this.emit('club', 1);
+          handled = true;
+          break;
+        case 'KeyQ':
+          this.emit('club', -1);
           handled = true;
           break;
         case 'KeyC':
@@ -221,9 +229,12 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
           spinAxis: range(-12, 12),
         });
         break;
+      case 'Digit0':
+      case 'Numpad0':
+        this.emit('testShot', { ballSpeed: 4.1 * 3, verticalLaunchAngle: 0, horizontalLaunchAngle: 0, spinSpeed: -500, spinAxis: 0 });
+        break;
       case 'Digit1':
       case 'Numpad1':
-        // this.emit('testShot', { ballSpeed: 150, verticalLaunchAngle: 11, horizontalLaunchAngle: 0, spinSpeed: 2000, spinAxis: 0 });
         this.emit('testShot', { ballSpeed: 150, verticalLaunchAngle: 13, horizontalLaunchAngle: 0, spinSpeed: 2500, spinAxis: 0 });
         break;
       case 'Digit2':
@@ -291,16 +302,11 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
     };
   }
 
-  // #touchMove(event: TouchEvent) {
-  //   const g = this.#touch;
-  //   if (!g) return;
-  //   const t = Array.from(event.touches).find(t => t.identifier === g.id);
-  //   if (!t) return;
-  //   const dx = t.clientX - g.startX;
-  //   const dy = t.clientY - g.startY; // screen y grows downward
   #pointerMove(event: PointerEvent) {
     const g = this.#gesture;
-    if (!g || event.pointerId !== g.id) return;
+    if (!g || event.pointerId !== g.id) {
+      return;
+    }
     const dx = event.clientX - g.startX;
     const dy = event.clientY - g.startY; // screen y grows downward
 
@@ -345,7 +351,6 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
       const upDx = g.lastX - g.apexX;
       const upDy = g.apexY - g.lastY; // positive = upward
       if (upDy > SWIPE_UP_MIN_PX) {
-        // event.preventDefault();
         // Angle of up-phase off vertical: right of vertical = positive HLA
         const hla = Math.max(-MAX_HLA_DEG, Math.min(MAX_HLA_DEG,
           Math.atan2(upDx, upDy) * (180 / Math.PI)));
@@ -362,7 +367,6 @@ export class CourseKeyboardControls extends EventEmitter<CourseKeyboardControlEv
           spinAxis: 0,
         });
       }
-      // return;
     }
 
 
