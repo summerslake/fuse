@@ -56,6 +56,9 @@ const MULTIPLAYER_TILE = {
   posterUrl: 'https://coursedata.opengolfsim.com/webgl/courses/mountain-vista/v1/mountain-vista-poster.jpg',
   slug: 'fuse_multiplayer',
   gameEngine: 'webgl',
+  // Desktop 1.21's course card reads attributes.available unguarded — an
+  // entry without it takes the whole library page down.
+  attributes: { available: true },
 };
 
 /**
@@ -119,6 +122,7 @@ function localCourseEntry(course, origin = '') {
     posterUrl: course.poster ? `${base}.poster` : MULTIPLAYER_TILE.posterUrl,
     slug: `local_${course.slug.replace(/-/g, '_')}`,
     gameEngine: 'webgl',
+    attributes: { available: true },
   };
 }
 
@@ -258,8 +262,19 @@ async function startRelay() {
   const secret = process.env.OGS_MP_SECRET || '';
   try {
     const { createRelay } = await import('./server/relay.js');
-    const relay = createRelay({ port, secret });
-    await relay.ready;
+    // A config edit restarts vite in-process: the old relay is told to close,
+    // but may still hold the port for a moment. Retry briefly before giving up.
+    let relay;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        relay = createRelay({ port, secret });
+        await relay.ready;
+        break;
+      } catch (err) {
+        if (err.code !== 'EADDRINUSE' || attempt >= 10) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
     console.log(
       `    Multiplayer relay: ws://localhost:${port}` +
         (secret ? '' : '  (no OGS_MP_SECRET — LAN/dev only)') +
