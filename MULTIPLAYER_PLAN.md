@@ -200,7 +200,8 @@ real round on the Square. Everything below is toward that.
 2. ✅ ~~**Real-world connectivity**~~ — **done 2026-07-26, a full 9-hole round.**
    `npm run host` serves the build and the relay together; forward TCP 5173 and
    8080; the guest launches Desktop with `OGS_APP_URL` pointed at the host and
-   needs no repo, no node, and no matching OpenGolfSim version. See
+   needs no repo, no node, and no matching OpenGolfSim version. **Since
+   Desktop 1.21 the guest uses Custom Games tiles instead (see 3e).** See
    `docs/HOSTING.md` and `docs/PLAYING-WITH-A-FRIEND.md`.
 3. **Phase 5 — robustness.**
    - ✅ ~~Disconnect/rejoin~~ — done 2026-07-25 (protocol v4). `NetClient` keeps a
@@ -261,6 +262,60 @@ real round on the Square. Everything below is toward that.
      handler in `courses.ts` calls `app.sendShotResult` for replayed remote
      shots too, so the host app may be recording other players' shots as local
      ones; check what Desktop does with them.
+3d. **Square plugin: the in-app launch monitor restart hangs** (found and patched
+   locally 2026-10-10; cost a solo round, because the only recovery was
+   restarting OpenGolfSim). Cause: the plugin fires its Bluetooth writes — a
+   heartbeat every 5 s, plus commands — and drops the promise. The Bluetooth
+   library rejects any write still pending at a disconnect ("Disconnected
+   unknown"); unhandled, that kills the plugin worker before it reports a clean
+   stop, and the app waits on it forever. A first patch that only guarded the
+   exit handler did nothing — the rejection belongs to the earlier write. Full
+   write-up, log excerpts and diff:
+   `docs/upstream-issues/square-plugin-exit-hang.md`.
+   - [x] **Patch loaded** (2026-11-02). On quit the plugin now stops cleanly,
+     logging `plugin is safe to shutdown` about 200 ms after it starts exiting.
+   - [ ] **Confirm it in real use:** with the Square connected, use "Restart
+     launch monitor service" mid-round and check the round survives.
+   - [x] **Posted** 2026-11-02:
+     https://github.com/OpenGolfSim/ogs-plugin-square/issues/3
+   - [x] **Re-applied on plugin 0.0.3** (2026-11-02). 0.0.3 (Oct 15) only adds
+     club sync (the Square follows the in-game club, including the Q/W keys)
+     and still has the bug. Installed copy is 0.0.3 + our patch; backups beside
+     it: `index.js.0.0.2-patched-backup`, `package.json.0.0.2-backup`,
+     `index.js.orig-backup` (pristine 0.0.2). 0.0.3 originals, patched file and
+     `fix-0.0.3.diff` are in the gitignored `tmp/square-plugin-patch/0.0.3/`.
+     **Re-apply after any further plugin update.**
+   - **Quit still hangs, and that's a separate bug in the host app** (root
+     cause confirmed 2026-11-02 by sampling the hung process). Desktop's
+     shutdown finishes, then Node waits to join the plugin's worker thread,
+     which is deadlocked in `@stoprocent/noble`'s macOS binding during teardown
+     (`NobleMac::~NobleMac` → `napi_release_threadsafe_function` →
+     mutex wait). Native code, so no plugin patch can fix it. Force quit is
+     safe: everything is saved by then. Posted:
+     https://github.com/OpenGolfSim/opengolfsim-desktop/issues/6
+3e. ✅ **OpenGolfSim Desktop 1.21 and the Custom Games tiles** (2026-11-02,
+   verified on this Mac including a multiplayer round on Charles T. Myers).
+   - 1.21 reads its library from `/api/library/all` (was `/library/home`), so
+     the injected tiles had silently vanished; the proxy now covers both. Its
+     course card also crashes the whole library page on an entry without
+     `attributes`, so injected entries carry `attributes: { available: true }`.
+   - **New, better way in:** 1.21 lists any folder in
+     `<userData>/fuse/` (index.html + game.json + poster.jpg) under **Custom
+     Games**. `scripts/install-desktop-launcher.mjs <host>` writes a
+     Multiplayer tile plus one per local course; each forwards the game window
+     to the host's page, and Desktop's shot/player bridge comes along. Desktop
+     runs normally: **no `OGS_APP_URL` needed** for host or guest. Custom games
+     always get their own section, never Courses (Desktop forces their type).
+     Course tiles pass `?courseUrl=`, which `courses.ts` now honours when
+     Desktop sends no course.
+   - **For Brett:** `--out <dir> --source http://localhost:5173` builds the
+     folders with the public address instead of installing them;
+     `FUSE-Multiplayer-Tiles.zip` (on the Desktop, with a readme) went out
+     2026-11-02. Rebuild it when courses or the IP change. **Not yet tried from
+     outside the network.**
+   - Also: regular catalog courses now load OpenGolfSim's hosted build
+     (`fused.opengolfsim.com`) or a downloaded bundle, not `app_url`, so the
+     in-round Multiplayer button only exists in our own tiles.
 3b. **Tell an intentional leave apart from a dropped connection.** Right now the
    relay treats both as a closed socket: mid-round it keeps the slot so the
    player can return. That's correct for a wifi blip and wrong for someone who
